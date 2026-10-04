@@ -1,0 +1,16 @@
+{
+  "name": "learn-and-earn",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "express": "^4.19.2",
+    "pg": "^8.11.5"
+  }
+}
