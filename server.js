@@ -1,0 +1,226 @@
+// Learn and Earn server. Needs env: DATABASE_URL, ADMIN_EMAIL, ADMIN_PASSWORD (10+ characters)
+const express = require('express'), { Pool } = require('pg'), bcrypt = require('bcryptjs'), crypto = require('crypto'), path = require('path');
+const { DATABASE_URL, ADMIN_EMAIL = '', ADMIN_PASSWORD } = process.env;
+const AE = ADMIN_EMAIL.toLowerCase();
+if (!DATABASE_URL || !AE || !ADMIN_PASSWORD || ADMIN_PASSWORD.length < 10) { console.error('Set DATABASE_URL, ADMIN_EMAIL and ADMIN_PASSWORD (at least 10 characters).'); process.exit(1); }
+const PRICE = [999, 2499, 4999, 9999, 14999], DEBIT = [299, 749, 1499, 2999, 4499], COMM = [700, 1750, 3500, 7000, 10500];
+const PASSIVE = PRICE.map(p => Math.round(p / 10)), ROOT = 'TRS-LEARN00001';
+
+const pool = new Pool({ connectionString: DATABASE_URL, ssl: /localhost|127\.0\.0\.1/.test(DATABASE_URL || '') ? false : { rejectUnauthorized: false } });
+const app = express(); app.set('trust proxy', 1); app.use(express.json({ limit: '400kb' }));
+app.use((req, res, next) => {
+  res.set({ 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'SAMEORIGIN', 'Referrer-Policy': 'same-origin',
+    'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; frame-src https://www.youtube-nocookie.com; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'" });
+  if (req.secure) res.set('Strict-Transport-Security', 'max-age=31536000');
+  // Block cross-site write requests (CSRF): the Origin must be this site.
+  if (req.method !== 'GET' && req.method !== 'HEAD' && req.headers.origin) {
+    try { if (new URL(req.headers.origin).host !== req.headers.host) return res.status(403).json({ error: 'Blocked.' }); } catch (e) { return res.status(403).json({ error: 'Blocked.' }); }
+  }
+  next();
+});
+// Basic rate limit: at most `max` calls per minute per IP for sensitive routes.
+const hits = new Map(); setInterval(() => hits.clear(), 60000).unref();
+const limit = max => (req, res, next) => { const k = req.ip + req.path, n = (hits.get(k) || 0) + 1; hits.set(k, n); n > max ? res.status(429).json({ error: 'Too many attempts. Please wait a minute.' }) : next(); };
+class E extends Error { constructor(s, m) { super(m); this.s = s; } }
+const w = f => (req, res) => f(req, res).catch(e => e.s ? res.status(e.s).json({ error: e.message })
+  : e.code === '23505' ? res.status(409).json({ error: 'This email already has an ID.' })
+  : (console.error(e), res.status(500).json({ error: 'Server error' })));
+async function tx(f) { const c = await pool.connect(); try { await c.query('BEGIN'); const r = await f(c); await c.query('COMMIT'); return r; } catch (e) { await c.query('ROLLBACK'); throw e; } finally { c.release(); } }
+const q = (c, s, p) => c.query(s, p).then(r => r.rows);
+const num = Number, newCode = () => 'TRS-' + Array.from({ length: 10 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 32)]).join('');
+const addTx = (c, uid, type, amt, bal, why) => c.query('INSERT INTO txns(uid,type,amt,bal,why) VALUES($1,$2,$3,$4,$5)', [uid, type, amt, bal, why]);
+const earn = (c, uid, amt, why) => c.query('INSERT INTO ledger(uid,amt,why) VALUES($1,$2,$3)', [uid, amt, why]);
+// Passive income: credit the sponsor's wallet and their earnings.
+async function passive(c, code, amt, why) {
+  if (!code || !(amt > 0)) return;
+  const [p] = await q(c, "UPDATE users SET wallet=wallet+$1 WHERE code=$2 AND status='active' RETURNING id,wallet", [amt, code]);
+  if (!p) return; await addTx(c, p.id, 'credit', amt, p.wallet, why); await earn(c, p.id, amt, why);
+}
+
+async function init() {
+  await pool.query(`
+  CREATE TABLE IF NOT EXISTS users(id SERIAL PRIMARY KEY,name TEXT NOT NULL,email TEXT UNIQUE NOT NULL,phone TEXT NOT NULL,pw TEXT NOT NULL,
+    code TEXT UNIQUE NOT NULL,sponsor TEXT,pkg SMALLINT NOT NULL DEFAULT 0,status TEXT NOT NULL DEFAULT 'pending',avatar TEXT,
+    wallet NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK(wallet>=0),fails INT NOT NULL DEFAULT 0,locked TIMESTAMPTZ,at TIMESTAMPTZ DEFAULT now());
+  CREATE TABLE IF NOT EXISTS sessions(h TEXT PRIMARY KEY,uid INT NOT NULL REFERENCES users(id),exp TIMESTAMPTZ NOT NULL);
+  CREATE TABLE IF NOT EXISTS admin_log(id SERIAL PRIMARY KEY,admin INT,action TEXT,target INT,at TIMESTAMPTZ DEFAULT now());
+  CREATE TABLE IF NOT EXISTS ledger(id SERIAL PRIMARY KEY,uid INT REFERENCES users(id),amt NUMERIC(12,2) NOT NULL,why TEXT,at TIMESTAMPTZ DEFAULT now());
+  CREATE TABLE IF NOT EXISTS txns(id SERIAL PRIMARY KEY,uid INT REFERENCES users(id),type TEXT NOT NULL,amt NUMERIC(12,2) NOT NULL,bal NUMERIC(12,2) NOT NULL,why TEXT,at TIMESTAMPTZ DEFAULT now());
+  CREATE TABLE IF NOT EXISTS reqs(id SERIAL PRIMARY KEY,sponsor TEXT NOT NULL,uid INT UNIQUE REFERENCES users(id),pkg SMALLINT NOT NULL,status TEXT DEFAULT 'pending',at TIMESTAMPTZ DEFAULT now());
+  CREATE TABLE IF NOT EXISTS pays(id SERIAL PRIMARY KEY,uid INT REFERENCES users(id),kind TEXT NOT NULL,amt NUMERIC(12,2) NOT NULL CHECK(amt>0),app TEXT,pkg SMALLINT,status TEXT DEFAULT 'pending',at TIMESTAMPTZ DEFAULT now());`);
+  setInterval(() => pool.query('DELETE FROM sessions WHERE exp<now()').catch(() => {}), 3600000).unref();
+  await pool.query("INSERT INTO users(name,email,phone,pw,code,pkg,status) VALUES('Admin',$1,'0000000000',$2,$3,0,'active') ON CONFLICT DO NOTHING", [AE, await bcrypt.hash(ADMIN_PASSWORD, 10), ROOT]);
+}
+
+const sha = t => crypto.createHash('sha256').update(t).digest('hex');
+const getSid = req => ((req.headers.cookie || '').match(/(?:^|;\s*)sid=([a-f0-9]{64})/) || [])[1];
+const setCookie = (req, res, t, maxAge) => res.append('Set-Cookie', `sid=${t}; HttpOnly; SameSite=Strict; Path=/${req.secure ? '; Secure' : ''}${maxAge != null ? '; Max-Age=' + maxAge : ''}`);
+async function startSession(req, res, uid) {
+  const t = crypto.randomBytes(32).toString('hex');
+  await pool.query("INSERT INTO sessions(h,uid,exp) VALUES($1,$2,now()+interval '24 hours')", [sha(t), uid]);
+  setCookie(req, res, t); // session cookie: ends when the browser closes, unless the user chooses "stay signed in"
+}
+const auth = async (req, res, next) => {
+  try { const t = getSid(req); if (!t) throw 0;
+    const [u] = await q(pool, "SELECT u.* FROM sessions s JOIN users u ON u.id=s.uid WHERE s.h=$1 AND s.exp>now() AND u.status='active'", [sha(t)]); if (!u) throw 0;
+    req.u = u; req.sid = t; req.admin = u.email === AE; next();
+  } catch (e) { res.status(401).json({ error: 'Please sign in.' }); }
+};
+const adm = (req, res, next) => req.admin ? next() : res.status(403).json({ error: 'Admin only.' });
+
+app.get('/api/verify', limit(30), w(async (req, res) => {
+  const [s] = await q(pool, "SELECT name FROM users WHERE code=$1 AND status='active'", [String(req.query.code || '').trim().toUpperCase()]);
+  if (!s) throw new E(404, 'Referral code not found.'); res.json({ name: s.name });
+}));
+
+// Sign up / direct buy. method 'wallet' = sponsor approves from wallet. 'upi' = pays our QR, admin verifies.
+app.get('/api/available', limit(30), w(async (req, res) => {
+  if ((await q(pool, 'SELECT 1 FROM users WHERE email=$1', [String(req.query.email || '').toLowerCase()])).length) throw new E(409, 'This email already has an ID. Sign in instead.');
+  res.json({ ok: true });
+}));
+app.post('/api/register', limit(10), w(async (req, res) => {
+  const { name, email, phone, password, sponsor, pkg, method, app: ap } = req.body, k = +pkg;
+  if (!name || !email || !phone || !password || !(k >= 0 && k < 5)) throw new E(400, 'Fill in all fields.');
+  if (String(password).length < 8 || String(password).length > 72) throw new E(400, 'Password needs 8 to 72 characters.');
+  if (String(name).length > 60 || String(email).length > 120 || String(phone).length > 20) throw new E(400, 'One of the fields is too long.');
+  if (!/^\S+@\S+\.\S+$/.test(email)) throw new E(400, 'Enter a valid email.');
+  if (String(phone).replace(/\D/g, '').length < 10) throw new E(400, 'Enter a 10-digit phone number.');
+  if (!['wallet', 'upi'].includes(method)) throw new E(400, 'Choose a payment method.');
+  const hash = await bcrypt.hash(String(password), 10);
+  await tx(async c => {
+    let sp = String(sponsor || '').trim().toUpperCase();
+    if (sp) { if (!(await q(c, "SELECT 1 FROM users WHERE code=$1 AND status='active'", [sp])).length) throw new E(404, 'TRS code not found.'); }
+    else if (method === 'wallet') throw new E(400, 'TRS code is required for Wallet payment.');
+    else { const [a] = await q(c, 'SELECT code FROM users WHERE email=$1', [AE]); sp = a ? a.code : ROOT; }
+    const [u] = await q(c, 'INSERT INTO users(name,email,phone,pw,code,sponsor,pkg) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id', [name.trim(), email.toLowerCase(), phone, hash, newCode(), sp, k]);
+    if (method === 'wallet') await c.query('INSERT INTO reqs(sponsor,uid,pkg) VALUES($1,$2,$3)', [sp, u.id, k]);
+    else await c.query("INSERT INTO pays(uid,kind,amt,app,pkg) VALUES($1,'buy',$2,$3,$4)", [u.id, PRICE[k], ap || 'UPI', k]);
+  });
+  res.status(201).json({ ok: true, method });
+}));
+
+const DUMMY = bcrypt.hashSync('not-a-real-password', 10);
+app.post('/api/login', limit(10), w(async (req, res) => {
+  const [u] = await q(pool, 'SELECT id,pw,status,locked FROM users WHERE email=$1', [String(req.body.email || '').toLowerCase().slice(0, 120)]);
+  if (u && u.locked && new Date(u.locked) > new Date()) throw new E(429, 'Too many wrong attempts. Try again in 15 minutes.');
+  const ok = await bcrypt.compare(String(req.body.password || '').slice(0, 72), u ? u.pw : DUMMY);
+  if (!u || !ok) {
+    if (u) await pool.query("UPDATE users SET fails=CASE WHEN fails+1>=5 THEN 0 ELSE fails+1 END, locked=CASE WHEN fails+1>=5 THEN now()+interval '15 minutes' ELSE locked END WHERE id=$1", [u.id]);
+    throw new E(401, 'Email or password is wrong.');
+  }
+  if (u.status !== 'active') throw new E(403, 'Your account is waiting for approval.');
+  await pool.query('UPDATE users SET fails=0,locked=NULL WHERE id=$1', [u.id]);
+  await startSession(req, res, u.id); res.json({ ok: true });
+}));
+app.post('/api/logout', w(async (req, res) => {
+  const t = getSid(req); if (t) await pool.query('DELETE FROM sessions WHERE h=$1', [sha(t)]);
+  setCookie(req, res, '', 0); res.json({ ok: true });
+}));
+app.post('/api/remember', auth, w(async (req, res) => {
+  await pool.query("UPDATE sessions SET exp=now()+interval '30 days' WHERE h=$1", [sha(req.sid)]);
+  setCookie(req, res, req.sid, 30 * 86400); res.json({ ok: true });
+}));
+
+const IST = "now() AT TIME ZONE 'Asia/Kolkata'";
+app.get('/api/me', auth, w(async (req, res) => {
+  const u = req.u;
+  const [e] = await q(pool, `SELECT
+    COALESCE(SUM(amt) FILTER (WHERE at >= (date_trunc('day',${IST})) AT TIME ZONE 'Asia/Kolkata'),0) AS today,
+    COALESCE(SUM(amt) FILTER (WHERE at > now()-interval '7 days'),0) AS d7,
+    COALESCE(SUM(amt) FILTER (WHERE at > now()-interval '30 days'),0) AS d30,
+    COALESCE(SUM(amt),0) AS total FROM ledger WHERE uid=$1`, [u.id]);
+  const chart = await q(pool, `SELECT to_char(d,'DD') AS l, COALESCE(SUM(l.amt),0) AS v
+    FROM generate_series((${IST})::date-6,(${IST})::date,'1 day') d
+    LEFT JOIN ledger l ON l.uid=$1 AND (l.at AT TIME ZONE 'Asia/Kolkata')::date=d::date GROUP BY d ORDER BY d`, [u.id]);
+  const [t] = await q(pool, "SELECT count(*)::int AS n FROM users WHERE sponsor=$1 AND status='active'", [u.code]);
+  res.json({ name: u.name, email: u.email, phone: u.phone, code: u.code, pkg: u.pkg, avatar: u.avatar, wallet: num(u.wallet), admin: req.admin,
+    earn: { today: num(e.today), d7: num(e.d7), d30: num(e.d30), total: num(e.total) }, chart: chart.map(r => ({ l: r.l, v: num(r.v) })), team: t.n });
+}));
+app.put('/api/me', auth, w(async (req, res) => {
+  const n = String(req.body.name || '').trim(), p = String(req.body.phone || '').trim();
+  if (!n || n.length > 60 || p.length > 20 || p.replace(/\D/g, '').length < 10) throw new E(400, 'Enter a valid name and phone.');
+  await pool.query('UPDATE users SET name=$1,phone=$2 WHERE id=$3', [n, p, req.u.id]); res.json({ ok: true });
+}));
+app.put('/api/me/avatar', auth, w(async (req, res) => {
+  const d = String(req.body.data || '');
+  if (!/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(d) || d.length > 300000) throw new E(400, 'Please use a JPG, PNG or WebP image.');
+  await pool.query('UPDATE users SET avatar=$1 WHERE id=$2', [d, req.u.id]); res.json({ ok: true });
+}));
+app.delete('/api/me/avatar', auth, w(async (req, res) => { await pool.query('UPDATE users SET avatar=NULL WHERE id=$1', [req.u.id]); res.json({ ok: true }); }));
+
+app.get('/api/team', auth, w(async (req, res) =>
+  res.json(await q(pool, "SELECT id,name,phone,pkg,at FROM users WHERE sponsor=$1 AND status='active' ORDER BY id DESC", [req.u.code]))));
+// Today's top 10 earners (all members). "Today" resets at midnight India time.
+app.get('/api/leaderboard', auth, w(async (req, res) => {
+  const rows = await q(pool, `SELECT u.name,SUM(l.amt) AS amt FROM ledger l JOIN users u ON u.id=l.uid
+    WHERE u.status='active' AND u.email<>$1 AND l.at >= (date_trunc('day',${IST})) AT TIME ZONE 'Asia/Kolkata'
+    GROUP BY u.id ORDER BY amt DESC, u.id LIMIT 10`, [AE]);
+  res.json(rows.map(r => ({ name: r.name, amt: num(r.amt) })));
+}));
+
+// Upgrade a team member to a higher package. Wallet pays the price difference.
+app.post('/api/team/:id/upgrade', auth, w(async (req, res) => {
+  const k = +req.body.pkg; if (!(k >= 0 && k < 5)) throw new E(400, 'Invalid package.');
+  res.json(await tx(async c => {
+    const [me] = await q(c, 'SELECT id,code,sponsor,wallet,name FROM users WHERE id=$1 FOR UPDATE', [req.u.id]);
+    const [m] = await q(c, "SELECT id,name,pkg FROM users WHERE id=$1 AND sponsor=$2 AND status='active' FOR UPDATE", [req.params.id, me.code]);
+    if (!m) throw new E(404, 'Member not found.');
+    if (k <= m.pkg) throw new E(400, 'You can only upgrade to a higher package.');
+    const d = DEBIT[k] - DEBIT[m.pkg];
+    if (num(me.wallet) < d) throw new E(402, 'Insufficient wallet balance. Please recharge your wallet.');
+    const [nw] = await q(c, 'UPDATE users SET wallet=wallet-$1 WHERE id=$2 RETURNING wallet', [d, me.id]);
+    await addTx(c, me.id, 'debit', d, nw.wallet, 'Upgrade ' + m.name);
+    if (COMM[k] - COMM[m.pkg] > 0) await earn(c, me.id, COMM[k] - COMM[m.pkg], 'Upgrade ' + m.name);
+    await c.query('UPDATE users SET pkg=$1 WHERE id=$2', [k, m.id]);
+    await passive(c, me.sponsor, PASSIVE[k] - PASSIVE[m.pkg], 'Passive income: ' + me.name + ' upgraded ' + m.name);
+    return { wallet: num(nw.wallet) };
+  }));
+}));
+
+app.get('/api/wallet', auth, w(async (req, res) =>
+  res.json({ balance: num(req.u.wallet), txns: await q(pool, 'SELECT type,amt,bal,why,at FROM txns WHERE uid=$1 ORDER BY id DESC LIMIT 100', [req.u.id]) })));
+app.post('/api/wallet/recharge', auth, limit(20), w(async (req, res) => {
+  const a = num(req.body.amount); if (!(a > 0 && a <= 1e6)) throw new E(400, 'Enter a valid amount.');
+  if ((await q(pool, "SELECT 1 FROM pays WHERE uid=$1 AND status='pending' AND kind='recharge' OFFSET 4", [req.u.id])).length) throw new E(429, 'You already have several pending recharges. Please wait for them to be verified.');
+  await pool.query("INSERT INTO pays(uid,kind,amt,app) VALUES($1,'recharge',$2,$3)", [req.u.id, a, String(req.body.app || 'UPI').slice(0, 30)]); res.status(201).json({ ok: true });
+}));
+app.get('/api/wallet/requests', auth, w(async (req, res) =>
+  res.json(await q(pool, "SELECT r.id,r.pkg,r.status,r.at,u.name,u.email,u.phone FROM reqs r JOIN users u ON u.id=r.uid WHERE r.sponsor=$1 ORDER BY (r.status='pending') DESC,r.id DESC", [req.u.code]))));
+
+// Approve a wallet account request: wallet debit, activate, earning, passive income. One transaction.
+app.post('/api/wallet/requests/:id/approve', auth, w(async (req, res) => {
+  res.json(await tx(async c => {
+    const [me] = await q(c, 'SELECT id,code,sponsor,wallet,name FROM users WHERE id=$1 FOR UPDATE', [req.u.id]);
+    const [r] = await q(c, "SELECT r.id,r.uid,r.pkg,u.name FROM reqs r JOIN users u ON u.id=r.uid WHERE r.id=$1 AND r.sponsor=$2 AND r.status='pending' FOR UPDATE OF r", [req.params.id, me.code]);
+    if (!r) throw new E(404, 'Request not found or already approved.');
+    if (num(me.wallet) < DEBIT[r.pkg]) throw new E(402, 'Insufficient wallet balance. Please recharge your wallet.');
+    const [nw] = await q(c, 'UPDATE users SET wallet=wallet-$1 WHERE id=$2 RETURNING wallet', [DEBIT[r.pkg], me.id]);
+    await addTx(c, me.id, 'debit', DEBIT[r.pkg], nw.wallet, 'Account activation: ' + r.name);
+    await c.query("UPDATE users SET status='active' WHERE id=$1", [r.uid]);
+    await c.query("UPDATE reqs SET status='approved' WHERE id=$1", [r.id]);
+    await earn(c, me.id, COMM[r.pkg], 'Activation: ' + r.name);
+    await passive(c, me.sponsor, PASSIVE[r.pkg], 'Passive income: ' + me.name + ' activated ' + r.name);
+    return { wallet: num(nw.wallet) };
+  }));
+}));
+
+// Admin: verify UPI payments after checking the money arrived.
+app.get('/api/admin/pays', auth, adm, w(async (req, res) =>
+  res.json(await q(pool, "SELECT p.id,p.kind,p.amt,p.app,p.pkg,p.status,p.at,u.name,u.email FROM pays p JOIN users u ON u.id=p.uid ORDER BY (p.status='pending') DESC,p.id DESC LIMIT 200"))));
+app.post('/api/admin/pays/:id/:act', auth, adm, w(async (req, res) => {
+  if (!['confirm', 'reject'].includes(req.params.act)) throw new E(400, 'Bad action.');
+  await tx(async c => {
+    const [p] = await q(c, "SELECT * FROM pays WHERE id=$1 AND status='pending' FOR UPDATE", [req.params.id]);
+    if (!p) throw new E(404, 'Payment not found or already handled.');
+    if (req.params.act === 'confirm') {
+      if (p.kind === 'recharge') { const [u] = await q(c, 'UPDATE users SET wallet=wallet+$1 WHERE id=$2 RETURNING wallet', [p.amt, p.uid]); await addTx(c, p.uid, 'credit', p.amt, u.wallet, 'Wallet recharge via ' + p.app); }
+      else await c.query("UPDATE users SET status='active' WHERE id=$1", [p.uid]);
+    }
+    await c.query('UPDATE pays SET status=$1 WHERE id=$2', [req.params.act === 'confirm' ? 'confirmed' : 'rejected', p.id]);
+    await c.query('INSERT INTO admin_log(admin,action,target) VALUES($1,$2,$3)', [req.u.id, req.params.act + ' payment', p.id]);
+  });
+  res.json({ ok: true });
+}));
+
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
+init().then(() => app.listen(process.env.PORT || 3000, () => console.log('Server running'))).catch(e => { console.error(e); process.exit(1); });
