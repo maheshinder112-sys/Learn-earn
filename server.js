@@ -1,7 +1,7 @@
 // Learn and Earn server. Needs env: DATABASE_URL, ADMIN_EMAIL, ADMIN_PASSWORD (10+ characters)
 const express = require('express'), { Pool } = require('pg'), bcrypt = require('bcryptjs'), crypto = require('crypto'), path = require('path');
-const { DATABASE_URL, ADMIN_EMAIL = '', ADMIN_PASSWORD } = process.env;
-const AE = ADMIN_EMAIL.toLowerCase();
+const DATABASE_URL = (process.env.DATABASE_URL || '').trim(), ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
+const AE = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
 if (!DATABASE_URL || !AE || !ADMIN_PASSWORD || ADMIN_PASSWORD.length < 10) { console.error('Set DATABASE_URL, ADMIN_EMAIL and ADMIN_PASSWORD (at least 10 characters).'); process.exit(1); }
 const PRICE = [999, 2499, 4999, 9999, 14999], DEBIT = [299, 749, 1499, 2999, 4499], COMM = [700, 1750, 3500, 7000, 10500];
 const PASSIVE = PRICE.map(p => Math.round(p / 10)), ROOT = 'TRS-LEARN00001';
@@ -48,8 +48,11 @@ async function init() {
   CREATE TABLE IF NOT EXISTS txns(id SERIAL PRIMARY KEY,uid INT REFERENCES users(id),type TEXT NOT NULL,amt NUMERIC(12,2) NOT NULL,bal NUMERIC(12,2) NOT NULL,why TEXT,at TIMESTAMPTZ DEFAULT now());
   CREATE TABLE IF NOT EXISTS reqs(id SERIAL PRIMARY KEY,sponsor TEXT NOT NULL,uid INT UNIQUE REFERENCES users(id),pkg SMALLINT NOT NULL,status TEXT DEFAULT 'pending',at TIMESTAMPTZ DEFAULT now());
   CREATE TABLE IF NOT EXISTS pays(id SERIAL PRIMARY KEY,uid INT REFERENCES users(id),kind TEXT NOT NULL,amt NUMERIC(12,2) NOT NULL CHECK(amt>0),app TEXT,pkg SMALLINT,status TEXT DEFAULT 'pending',at TIMESTAMPTZ DEFAULT now());`);
+  // Upgrade tables made by older versions of this server.
+  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS fails INT NOT NULL DEFAULT 0; ALTER TABLE users ADD COLUMN IF NOT EXISTS locked TIMESTAMPTZ; ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar TEXT;');
   setInterval(() => pool.query('DELETE FROM sessions WHERE exp<now()').catch(() => {}), 3600000).unref();
-  await pool.query("INSERT INTO users(name,email,phone,pw,code,pkg,status) VALUES('Admin',$1,'0000000000',$2,$3,0,'active') ON CONFLICT DO NOTHING", [AE, await bcrypt.hash(ADMIN_PASSWORD, 10), ROOT]);
+  // The admin account always matches ADMIN_EMAIL / ADMIN_PASSWORD from Render (so a forgotten password can be reset there).
+  await pool.query("INSERT INTO users(name,email,phone,pw,code,pkg,status) VALUES('Admin',$1,'0000000000',$2,$3,0,'active') ON CONFLICT (email) DO UPDATE SET pw=EXCLUDED.pw,status='active',fails=0,locked=NULL", [AE, await bcrypt.hash(ADMIN_PASSWORD, 10), ROOT]);
 }
 
 const sha = t => crypto.createHash('sha256').update(t).digest('hex');
@@ -205,6 +208,12 @@ app.post('/api/wallet/requests/:id/approve', auth, w(async (req, res) => {
 }));
 
 // Admin: verify UPI payments after checking the money arrived.
+// Admin only: totals from the database (the admin's own account is not counted as a member).
+app.get('/api/admin/stats', auth, adm, w(async (req, res) => {
+  const [m] = await q(pool, "SELECT count(*)::int AS n FROM users WHERE status='active' AND email<>$1", [AE]);
+  const [e] = await q(pool, "SELECT COALESCE(SUM(l.amt),0) AS t FROM ledger l JOIN users u ON u.id=l.uid WHERE u.email<>$1", [AE]);
+  res.json({ members: m.n, earnings: num(e.t) });
+}));
 app.get('/api/admin/pays', auth, adm, w(async (req, res) =>
   res.json(await q(pool, "SELECT p.id,p.kind,p.amt,p.app,p.pkg,p.status,p.at,u.name,u.email FROM pays p JOIN users u ON u.id=p.uid ORDER BY (p.status='pending') DESC,p.id DESC LIMIT 200"))));
 app.post('/api/admin/pays/:id/:act', auth, adm, w(async (req, res) => {
