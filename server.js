@@ -173,10 +173,12 @@ app.get('/api/leaderboard', auth, w(async (req, res) => {
 app.post('/api/team/:id/upgrade', auth, w(async (req, res) => {
   const k = +req.body.pkg; if (!(k >= 0 && k < 5)) throw new E(400, 'Invalid package.');
   res.json(await tx(async c => {
-    const [me] = await q(c, 'SELECT id,code,sponsor,wallet,name FROM users WHERE id=$1 FOR UPDATE', [req.u.id]);
+    const [me] = await q(c, 'SELECT id,code,sponsor,wallet,name,pkg FROM users WHERE id=$1 FOR UPDATE', [req.u.id]);
     const [m] = await q(c, "SELECT id,name,pkg FROM users WHERE id=$1 AND sponsor=$2 AND status='active' FOR UPDATE", [req.params.id, me.code]);
     if (!m) throw new E(404, 'Member not found.');
     if (k <= m.pkg) throw new E(400, 'You can only upgrade to a higher package.');
+    // A member cannot upgrade a team member above their own course. The admin is not limited.
+    if (!req.admin && k > me.pkg) throw new E(403, LEVEL[k] + ' Mastery is higher than your course. Upgrade your own course to ' + LEVEL[k] + ' Mastery or higher first.');
     const d = DEBIT[k] - DEBIT[m.pkg];
     if (num(me.wallet) < d) throw new E(402, 'Insufficient wallet balance. Please recharge your wallet.');
     const [nw] = await q(c, 'UPDATE users SET wallet=wallet-$1 WHERE id=$2 RETURNING wallet', [d, me.id]);
@@ -210,14 +212,16 @@ app.post('/api/wallet/recharge', auth, limit(20), w(async (req, res) => {
   await pool.query("INSERT INTO pays(uid,kind,amt,app) VALUES($1,'recharge',$2,$3)", [req.u.id, a, String(req.body.app || 'UPI').slice(0, 30)]); res.status(201).json({ ok: true });
 }));
 app.get('/api/wallet/requests', auth, w(async (req, res) =>
-  res.json(await q(pool, "SELECT r.id,r.pkg,r.status,r.at,u.name,u.vip,u.email,u.phone FROM reqs r JOIN users u ON u.id=r.uid WHERE r.sponsor=$1 ORDER BY (r.status='pending') DESC,r.id DESC", [req.u.code]))));
+  res.json(await q(pool, "SELECT r.id,r.pkg,r.status,r.at,u.name,u.vip,u.email,u.phone FROM reqs r JOIN users u ON u.id=r.uid WHERE r.sponsor=$1 AND u.status<>'rejected' ORDER BY (r.status='pending') DESC,r.id DESC", [req.u.code]))));
 
 // Approve a wallet account request: wallet debit, activate, earning, passive income. One transaction.
 app.post('/api/wallet/requests/:id/approve', auth, w(async (req, res) => {
   res.json(await tx(async c => {
-    const [me] = await q(c, 'SELECT id,code,sponsor,wallet,name FROM users WHERE id=$1 FOR UPDATE', [req.u.id]);
+    const [me] = await q(c, 'SELECT id,code,sponsor,wallet,name,pkg FROM users WHERE id=$1 FOR UPDATE', [req.u.id]);
     const [r] = await q(c, "SELECT r.id,r.uid,r.pkg,u.name FROM reqs r JOIN users u ON u.id=r.uid WHERE r.id=$1 AND r.sponsor=$2 AND r.status='pending' FOR UPDATE OF r", [req.params.id, me.code]);
     if (!r) throw new E(404, 'Request not found or already approved.');
+    // A member can only approve a course at or below their own course. The admin is not limited.
+    if (!req.admin && r.pkg > me.pkg) throw new E(403, 'This request is for ' + LEVEL[r.pkg] + ' Mastery, which is higher than your course. Upgrade your course to ' + LEVEL[r.pkg] + ' Mastery or higher to approve it.');
     if (num(me.wallet) < DEBIT[r.pkg]) throw new E(402, 'Insufficient wallet balance. Please recharge your wallet.');
     const [nw] = await q(c, 'UPDATE users SET wallet=wallet-$1 WHERE id=$2 RETURNING wallet', [DEBIT[r.pkg], me.id]);
     await addTx(c, me.id, 'debit', DEBIT[r.pkg], nw.wallet, 'Account activation: ' + r.name);
@@ -239,7 +243,7 @@ app.get('/api/admin/stats', auth, adm, w(async (req, res) => {
 }));
 // Admin only: every member with package and status. Suspend / un-suspend, and VIP on / off.
 app.get('/api/admin/members', auth, adm, w(async (req, res) =>
-  res.json(await q(pool, 'SELECT id,name,email,phone,code,pkg,status,vip,at FROM users WHERE email<>$1 ORDER BY id DESC LIMIT 1000', [AE]))));
+  res.json(await q(pool, "SELECT id,name,email,phone,code,pkg,status,vip,at FROM users WHERE email<>$1 AND status<>'rejected' ORDER BY id DESC LIMIT 1000", [AE]))));
 app.post('/api/admin/members/:id/:act', auth, adm, w(async (req, res) => {
   const a = req.params.act, on = !!req.body.on;
   if (!['vip', 'suspend'].includes(a)) throw new E(400, 'Bad action.');
@@ -260,7 +264,7 @@ app.post('/api/admin/members/:id/:act', auth, adm, w(async (req, res) => {
   res.json({ ok: true });
 }));
 app.get('/api/admin/pays', auth, adm, w(async (req, res) =>
-  res.json(await q(pool, "SELECT p.id,p.kind,p.amt,p.app,p.pkg,p.status,p.at,u.name,u.vip,u.email FROM pays p JOIN users u ON u.id=p.uid ORDER BY (p.status='pending') DESC,p.id DESC LIMIT 200"))));
+  res.json(await q(pool, "SELECT p.id,p.kind,p.amt,p.app,p.pkg,p.status,p.at,u.name,u.vip,u.email FROM pays p JOIN users u ON u.id=p.uid WHERE u.status<>'rejected' ORDER BY (p.status='pending') DESC,p.id DESC LIMIT 200"))));
 app.post('/api/admin/pays/:id/:act', auth, adm, w(async (req, res) => {
   if (!['confirm', 'reject'].includes(req.params.act)) throw new E(400, 'Bad action.');
   await tx(async c => {
@@ -271,12 +275,18 @@ app.post('/api/admin/pays/:id/:act', auth, adm, w(async (req, res) => {
       else { await c.query("UPDATE users SET status='active' WHERE id=$1", [p.uid]); await giveCashback(c, p.uid, p.pkg); }
     }
     await c.query('UPDATE pays SET status=$1 WHERE id=$2', [req.params.act === 'confirm' ? 'confirmed' : 'rejected', p.id]);
+    // A rejected sign-up ID disappears everywhere (pending / active / all). The email is released so the person can sign up again.
+    if (req.params.act === 'reject' && p.kind !== 'recharge') {
+      await c.query("UPDATE users SET status='rejected', email='rejected-'||id||'@removed.invalid' WHERE id=$1 AND status='pending'", [p.uid]);
+      await c.query('DELETE FROM sessions WHERE uid=$1', [p.uid]);
+    }
     await c.query('INSERT INTO admin_log(admin,action,target) VALUES($1,$2,$3)', [req.u.id, req.params.act + ' payment', p.id]);
   });
   res.json({ ok: true });
 }));
 
 // Open /api/health in the browser to see which server version is live.
-app.get('/api/health', (req, res) => res.json({ ok: true, version: '2026-10-06-b' }));
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
+app.get('/api/health', (req, res) => res.json({ ok: true, version: '2026-10-06-f' }));
+// Every page (/courses, /about, /login ...) is the same app file; the app reads the address and shows the right page.
+app.get('*', (req, res) => req.path.startsWith('/api/') ? res.status(404).json({ error: 'Not found' }) : res.sendFile(path.join(__dirname, 'index.html')));
 init().then(() => app.listen(process.env.PORT || 3000, () => console.log('Server running'))).catch(e => { console.error(e); process.exit(1); });
