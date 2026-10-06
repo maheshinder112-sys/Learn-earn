@@ -4,6 +4,7 @@ const DATABASE_URL = (process.env.DATABASE_URL || '').trim(), ADMIN_PASSWORD = p
 const AE = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
 if (!DATABASE_URL || !AE || !ADMIN_PASSWORD || ADMIN_PASSWORD.length < 10) { console.error('Set DATABASE_URL, ADMIN_EMAIL and ADMIN_PASSWORD (at least 10 characters).'); process.exit(1); }
 const PRICE = [999, 2499, 4999, 9999, 14999], DEBIT = [299, 749, 1499, 2999, 4499], COMM = [700, 1750, 3500, 7000, 10500];
+const CASHBACK = [1120, 1830, 2980, 3670, 3910], CB_MIN = 5000, LEVEL = ['Marketing', 'Branding', 'Traffic', 'Influence', 'Finance']; // cashback per activated ID; it can move to the wallet once it reaches CB_MIN
 const PASSIVE = PRICE.map(p => Math.round(p / 10)), ROOT = 'TRS-LEARN00001';
 
 const pool = new Pool({ connectionString: DATABASE_URL, ssl: /localhost|127\.0\.0\.1/.test(DATABASE_URL || '') ? false : { rejectUnauthorized: false } });
@@ -29,6 +30,11 @@ async function tx(f) { const c = await pool.connect(); try { await c.query('BEGI
 const q = (c, s, p) => c.query(s, p).then(r => r.rows);
 const num = Number, newCode = () => 'TRS-' + Array.from({ length: 10 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 32)]).join('');
 const addTx = (c, uid, type, amt, bal, why) => c.query('INSERT INTO txns(uid,type,amt,bal,why) VALUES($1,$2,$3,$4,$5)', [uid, type, amt, bal, why]);
+// Every newly activated ID gets cashback according to its own package level.
+async function giveCashback(c, uid, pkg) {
+  const [cb] = await q(c, 'UPDATE users SET cashback=cashback+$1 WHERE id=$2 RETURNING cashback', [CASHBACK[pkg], uid]);
+  await c.query("INSERT INTO cb_log(uid,type,amt,bal,why) VALUES($1,'credit',$2,$3,$4)", [uid, CASHBACK[pkg], cb.cashback, 'Cashback: ' + LEVEL[pkg] + ' Mastery ID activated']);
+}
 const earn = (c, uid, amt, why) => c.query('INSERT INTO ledger(uid,amt,why) VALUES($1,$2,$3)', [uid, amt, why]);
 // Passive income: credit the sponsor's wallet and their earnings.
 async function passive(c, code, amt, why) {
@@ -41,15 +47,16 @@ async function init() {
   await pool.query(`
   CREATE TABLE IF NOT EXISTS users(id SERIAL PRIMARY KEY,name TEXT NOT NULL,email TEXT UNIQUE NOT NULL,phone TEXT NOT NULL,pw TEXT NOT NULL,
     code TEXT UNIQUE NOT NULL,sponsor TEXT,pkg SMALLINT NOT NULL DEFAULT 0,status TEXT NOT NULL DEFAULT 'pending',avatar TEXT,
-    wallet NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK(wallet>=0),fails INT NOT NULL DEFAULT 0,locked TIMESTAMPTZ,at TIMESTAMPTZ DEFAULT now());
+    wallet NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK(wallet>=0),cashback NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK(cashback>=0),vip BOOLEAN NOT NULL DEFAULT false,fails INT NOT NULL DEFAULT 0,locked TIMESTAMPTZ,at TIMESTAMPTZ DEFAULT now());
   CREATE TABLE IF NOT EXISTS sessions(h TEXT PRIMARY KEY,uid INT NOT NULL REFERENCES users(id),exp TIMESTAMPTZ NOT NULL);
+  CREATE TABLE IF NOT EXISTS cb_log(id SERIAL PRIMARY KEY,uid INT REFERENCES users(id),type TEXT NOT NULL,amt NUMERIC(12,2) NOT NULL,bal NUMERIC(12,2) NOT NULL,why TEXT,at TIMESTAMPTZ DEFAULT now());
   CREATE TABLE IF NOT EXISTS admin_log(id SERIAL PRIMARY KEY,admin INT,action TEXT,target INT,at TIMESTAMPTZ DEFAULT now());
   CREATE TABLE IF NOT EXISTS ledger(id SERIAL PRIMARY KEY,uid INT REFERENCES users(id),amt NUMERIC(12,2) NOT NULL,why TEXT,at TIMESTAMPTZ DEFAULT now());
   CREATE TABLE IF NOT EXISTS txns(id SERIAL PRIMARY KEY,uid INT REFERENCES users(id),type TEXT NOT NULL,amt NUMERIC(12,2) NOT NULL,bal NUMERIC(12,2) NOT NULL,why TEXT,at TIMESTAMPTZ DEFAULT now());
   CREATE TABLE IF NOT EXISTS reqs(id SERIAL PRIMARY KEY,sponsor TEXT NOT NULL,uid INT UNIQUE REFERENCES users(id),pkg SMALLINT NOT NULL,status TEXT DEFAULT 'pending',at TIMESTAMPTZ DEFAULT now());
   CREATE TABLE IF NOT EXISTS pays(id SERIAL PRIMARY KEY,uid INT REFERENCES users(id),kind TEXT NOT NULL,amt NUMERIC(12,2) NOT NULL CHECK(amt>0),app TEXT,pkg SMALLINT,status TEXT DEFAULT 'pending',at TIMESTAMPTZ DEFAULT now());`);
   // Upgrade tables made by older versions of this server.
-  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS fails INT NOT NULL DEFAULT 0; ALTER TABLE users ADD COLUMN IF NOT EXISTS locked TIMESTAMPTZ; ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar TEXT;');
+  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS fails INT NOT NULL DEFAULT 0; ALTER TABLE users ADD COLUMN IF NOT EXISTS locked TIMESTAMPTZ; ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar TEXT; ALTER TABLE users ADD COLUMN IF NOT EXISTS cashback NUMERIC(12,2) NOT NULL DEFAULT 0; ALTER TABLE users ADD COLUMN IF NOT EXISTS vip BOOLEAN NOT NULL DEFAULT false;');
   setInterval(() => pool.query('DELETE FROM sessions WHERE exp<now()').catch(() => {}), 3600000).unref();
   // The admin account always matches ADMIN_EMAIL / ADMIN_PASSWORD from Render (so a forgotten password can be reset there).
   await pool.query("INSERT INTO users(name,email,phone,pw,code,pkg,status) VALUES('Admin',$1,'0000000000',$2,$3,0,'active') ON CONFLICT (email) DO UPDATE SET pw=EXCLUDED.pw,status='active',fails=0,locked=NULL", [AE, await bcrypt.hash(ADMIN_PASSWORD, 10), ROOT]);
@@ -111,6 +118,7 @@ app.post('/api/login', limit(10), w(async (req, res) => {
     if (u) await pool.query("UPDATE users SET fails=CASE WHEN fails+1>=5 THEN 0 ELSE fails+1 END, locked=CASE WHEN fails+1>=5 THEN now()+interval '15 minutes' ELSE locked END WHERE id=$1", [u.id]);
     throw new E(401, 'Email or password is wrong.');
   }
+  if (u.status === 'suspended') throw new E(403, 'Your account is suspended. Please contact support.');
   if (u.status !== 'active') throw new E(403, 'Your account is waiting for approval.');
   await pool.query('UPDATE users SET fails=0,locked=NULL WHERE id=$1', [u.id]);
   await startSession(req, res, u.id); res.json({ ok: true });
@@ -136,7 +144,7 @@ app.get('/api/me', auth, w(async (req, res) => {
     FROM generate_series((${IST})::date-6,(${IST})::date,'1 day') d
     LEFT JOIN ledger l ON l.uid=$1 AND (l.at AT TIME ZONE 'Asia/Kolkata')::date=d::date GROUP BY d ORDER BY d`, [u.id]);
   const [t] = await q(pool, "SELECT count(*)::int AS n FROM users WHERE sponsor=$1 AND status='active'", [u.code]);
-  res.json({ name: u.name, email: u.email, phone: u.phone, code: u.code, pkg: u.pkg, avatar: u.avatar, wallet: num(u.wallet), admin: req.admin,
+  res.json({ name: u.name, email: u.email, phone: u.phone, code: u.code, pkg: u.pkg, avatar: u.avatar, wallet: num(u.wallet), cashback: num(u.cashback), vip: !!u.vip, admin: req.admin,
     earn: { today: num(e.today), d7: num(e.d7), d30: num(e.d30), total: num(e.total) }, chart: chart.map(r => ({ l: r.l, v: num(r.v) })), team: t.n });
 }));
 app.put('/api/me', auth, w(async (req, res) => {
@@ -152,13 +160,13 @@ app.put('/api/me/avatar', auth, w(async (req, res) => {
 app.delete('/api/me/avatar', auth, w(async (req, res) => { await pool.query('UPDATE users SET avatar=NULL WHERE id=$1', [req.u.id]); res.json({ ok: true }); }));
 
 app.get('/api/team', auth, w(async (req, res) =>
-  res.json(await q(pool, "SELECT id,name,phone,pkg,at FROM users WHERE sponsor=$1 AND status='active' ORDER BY id DESC", [req.u.code]))));
+  res.json(await q(pool, "SELECT id,name,vip,phone,pkg,at FROM users WHERE sponsor=$1 AND status='active' ORDER BY id DESC", [req.u.code]))));
 // Today's top 10 earners (all members). "Today" resets at midnight India time.
 app.get('/api/leaderboard', auth, w(async (req, res) => {
-  const rows = await q(pool, `SELECT u.name,SUM(l.amt) AS amt FROM ledger l JOIN users u ON u.id=l.uid
+  const rows = await q(pool, `SELECT u.name,u.vip,SUM(l.amt) AS amt FROM ledger l JOIN users u ON u.id=l.uid
     WHERE u.status='active' AND u.email<>$1 AND l.at >= (date_trunc('day',${IST})) AT TIME ZONE 'Asia/Kolkata'
     GROUP BY u.id ORDER BY amt DESC, u.id LIMIT 10`, [AE]);
-  res.json(rows.map(r => ({ name: r.name, amt: num(r.amt) })));
+  res.json(rows.map(r => ({ name: r.name, vip: r.vip, amt: num(r.amt) })));
 }));
 
 // Upgrade a team member to a higher package. Wallet pays the price difference.
@@ -180,15 +188,29 @@ app.post('/api/team/:id/upgrade', auth, w(async (req, res) => {
   }));
 }));
 
-app.get('/api/wallet', auth, w(async (req, res) =>
-  res.json({ balance: num(req.u.wallet), txns: await q(pool, 'SELECT type,amt,bal,why,at FROM txns WHERE uid=$1 ORDER BY id DESC LIMIT 100', [req.u.id]) })));
+app.get('/api/wallet', auth, w(async (req, res) => res.json({
+  balance: num(req.u.wallet), cashback: num(req.u.cashback),
+  txns: await q(pool, 'SELECT type,amt,bal,why,at FROM txns WHERE uid=$1 ORDER BY id DESC LIMIT 100', [req.u.id]),
+  cb: await q(pool, 'SELECT type,amt,bal,why,at FROM cb_log WHERE uid=$1 ORDER BY id DESC LIMIT 100', [req.u.id]) })));
+// Cashback can be moved to the wallet only when it has reached CB_MIN. The whole balance moves.
+app.post('/api/wallet/cashback/transfer', auth, w(async (req, res) => {
+  res.json(await tx(async c => {
+    const [me] = await q(c, 'SELECT id,cashback FROM users WHERE id=$1 FOR UPDATE', [req.u.id]);
+    if (num(me.cashback) < CB_MIN) throw new E(400, 'Cashback can be transferred only when it reaches \u20b95,000 or more.');
+    const amt = num(me.cashback);
+    const [u] = await q(c, 'UPDATE users SET cashback=0, wallet=wallet+$1 WHERE id=$2 RETURNING wallet', [amt, me.id]);
+    await addTx(c, me.id, 'credit', amt, u.wallet, 'Cashback transferred to wallet');
+    await c.query("INSERT INTO cb_log(uid,type,amt,bal,why) VALUES($1,'transfer',$2,0,'Transferred to wallet')", [me.id, amt]);
+    return { wallet: num(u.wallet) };
+  }));
+}));
 app.post('/api/wallet/recharge', auth, limit(20), w(async (req, res) => {
   const a = num(req.body.amount); if (!(a > 0 && a <= 1e6)) throw new E(400, 'Enter a valid amount.');
   if ((await q(pool, "SELECT 1 FROM pays WHERE uid=$1 AND status='pending' AND kind='recharge' OFFSET 4", [req.u.id])).length) throw new E(429, 'You already have several pending recharges. Please wait for them to be verified.');
   await pool.query("INSERT INTO pays(uid,kind,amt,app) VALUES($1,'recharge',$2,$3)", [req.u.id, a, String(req.body.app || 'UPI').slice(0, 30)]); res.status(201).json({ ok: true });
 }));
 app.get('/api/wallet/requests', auth, w(async (req, res) =>
-  res.json(await q(pool, "SELECT r.id,r.pkg,r.status,r.at,u.name,u.email,u.phone FROM reqs r JOIN users u ON u.id=r.uid WHERE r.sponsor=$1 ORDER BY (r.status='pending') DESC,r.id DESC", [req.u.code]))));
+  res.json(await q(pool, "SELECT r.id,r.pkg,r.status,r.at,u.name,u.vip,u.email,u.phone FROM reqs r JOIN users u ON u.id=r.uid WHERE r.sponsor=$1 ORDER BY (r.status='pending') DESC,r.id DESC", [req.u.code]))));
 
 // Approve a wallet account request: wallet debit, activate, earning, passive income. One transaction.
 app.post('/api/wallet/requests/:id/approve', auth, w(async (req, res) => {
@@ -203,6 +225,7 @@ app.post('/api/wallet/requests/:id/approve', auth, w(async (req, res) => {
     await c.query("UPDATE reqs SET status='approved' WHERE id=$1", [r.id]);
     await earn(c, me.id, COMM[r.pkg], 'Activation: ' + r.name);
     await passive(c, me.sponsor, PASSIVE[r.pkg], 'Passive income: ' + me.name + ' activated ' + r.name);
+    await giveCashback(c, r.uid, r.pkg);
     return { wallet: num(nw.wallet) };
   }));
 }));
@@ -214,8 +237,30 @@ app.get('/api/admin/stats', auth, adm, w(async (req, res) => {
   const [e] = await q(pool, "SELECT COALESCE(SUM(l.amt),0) AS t FROM ledger l JOIN users u ON u.id=l.uid WHERE u.email<>$1", [AE]);
   res.json({ members: m.n, earnings: num(e.t) });
 }));
+// Admin only: every member with package and status. Suspend / un-suspend, and VIP on / off.
+app.get('/api/admin/members', auth, adm, w(async (req, res) =>
+  res.json(await q(pool, 'SELECT id,name,email,phone,code,pkg,status,vip,at FROM users WHERE email<>$1 ORDER BY id DESC LIMIT 1000', [AE]))));
+app.post('/api/admin/members/:id/:act', auth, adm, w(async (req, res) => {
+  const a = req.params.act, on = !!req.body.on;
+  if (!['vip', 'suspend'].includes(a)) throw new E(400, 'Bad action.');
+  await tx(async c => {
+    const [m] = await q(c, 'SELECT id,status FROM users WHERE id=$1 AND email<>$2 FOR UPDATE', [req.params.id, AE]);
+    if (!m) throw new E(404, 'Member not found.');
+    if (a === 'vip') await c.query('UPDATE users SET vip=$1 WHERE id=$2', [on, m.id]);
+    else if (on) {
+      if (m.status !== 'active') throw new E(400, 'Only active members can be suspended.');
+      await c.query("UPDATE users SET status='suspended' WHERE id=$1", [m.id]);
+      await c.query('DELETE FROM sessions WHERE uid=$1', [m.id]); // sign them out everywhere
+    } else {
+      if (m.status !== 'suspended') throw new E(400, 'This member is not suspended.');
+      await c.query("UPDATE users SET status='active' WHERE id=$1", [m.id]);
+    }
+    await c.query('INSERT INTO admin_log(admin,action,target) VALUES($1,$2,$3)', [req.u.id, a + (on ? ' on' : ' off'), m.id]);
+  });
+  res.json({ ok: true });
+}));
 app.get('/api/admin/pays', auth, adm, w(async (req, res) =>
-  res.json(await q(pool, "SELECT p.id,p.kind,p.amt,p.app,p.pkg,p.status,p.at,u.name,u.email FROM pays p JOIN users u ON u.id=p.uid ORDER BY (p.status='pending') DESC,p.id DESC LIMIT 200"))));
+  res.json(await q(pool, "SELECT p.id,p.kind,p.amt,p.app,p.pkg,p.status,p.at,u.name,u.vip,u.email FROM pays p JOIN users u ON u.id=p.uid ORDER BY (p.status='pending') DESC,p.id DESC LIMIT 200"))));
 app.post('/api/admin/pays/:id/:act', auth, adm, w(async (req, res) => {
   if (!['confirm', 'reject'].includes(req.params.act)) throw new E(400, 'Bad action.');
   await tx(async c => {
@@ -223,7 +268,7 @@ app.post('/api/admin/pays/:id/:act', auth, adm, w(async (req, res) => {
     if (!p) throw new E(404, 'Payment not found or already handled.');
     if (req.params.act === 'confirm') {
       if (p.kind === 'recharge') { const [u] = await q(c, 'UPDATE users SET wallet=wallet+$1 WHERE id=$2 RETURNING wallet', [p.amt, p.uid]); await addTx(c, p.uid, 'credit', p.amt, u.wallet, 'Wallet recharge via ' + p.app); }
-      else await c.query("UPDATE users SET status='active' WHERE id=$1", [p.uid]);
+      else { await c.query("UPDATE users SET status='active' WHERE id=$1", [p.uid]); await giveCashback(c, p.uid, p.pkg); }
     }
     await c.query('UPDATE pays SET status=$1 WHERE id=$2', [req.params.act === 'confirm' ? 'confirmed' : 'rejected', p.id]);
     await c.query('INSERT INTO admin_log(admin,action,target) VALUES($1,$2,$3)', [req.u.id, req.params.act + ' payment', p.id]);
@@ -231,5 +276,7 @@ app.post('/api/admin/pays/:id/:act', auth, adm, w(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// Open /api/health in the browser to see which server version is live.
+app.get('/api/health', (req, res) => res.json({ ok: true, version: '2026-10-06-b' }));
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 init().then(() => app.listen(process.env.PORT || 3000, () => console.log('Server running'))).catch(e => { console.error(e); process.exit(1); });
