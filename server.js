@@ -148,9 +148,15 @@ app.get('/api/me', auth, w(async (req, res) => {
     earn: { today: num(e.today), d7: num(e.d7), d30: num(e.d30), total: num(e.total) }, chart: chart.map(r => ({ l: r.l, v: num(r.v) })), team: t.n });
 }));
 app.put('/api/me', auth, w(async (req, res) => {
-  const n = String(req.body.name || '').trim(), p = String(req.body.phone || '').trim();
+  const n = String(req.body.name || '').trim(), p = String(req.body.phone || '').trim(), pw = String(req.body.password || '');
   if (!n || n.length > 60 || p.length > 20 || p.replace(/\D/g, '').length < 10) throw new E(400, 'Enter a valid name and phone.');
-  await pool.query('UPDATE users SET name=$1,phone=$2 WHERE id=$3', [n, p, req.u.id]); res.json({ ok: true });
+  if (pw && (pw.length < 8 || pw.length > 72)) throw new E(400, 'New password needs 8 to 72 characters.');
+  await pool.query('UPDATE users SET name=$1,phone=$2 WHERE id=$3', [n, p, req.u.id]);
+  if (pw) { // new password: save it and sign out every other device
+    await pool.query('UPDATE users SET pw=$1 WHERE id=$2', [await bcrypt.hash(pw, 10), req.u.id]);
+    await pool.query('DELETE FROM sessions WHERE uid=$1 AND h<>$2', [req.u.id, sha(req.sid)]);
+  }
+  res.json({ ok: true, password: !!pw });
 }));
 app.put('/api/me/avatar', auth, w(async (req, res) => {
   const d = String(req.body.data || '');
@@ -160,13 +166,34 @@ app.put('/api/me/avatar', auth, w(async (req, res) => {
 app.delete('/api/me/avatar', auth, w(async (req, res) => { await pool.query('UPDATE users SET avatar=NULL WHERE id=$1', [req.u.id]); res.json({ ok: true }); }));
 
 app.get('/api/team', auth, w(async (req, res) =>
-  res.json(await q(pool, "SELECT id,name,vip,phone,pkg,at FROM users WHERE sponsor=$1 AND status='active' ORDER BY id DESC", [req.u.code]))));
+  res.json(await q(pool, "SELECT id,name,vip,phone,email,pkg,at,(avatar IS NOT NULL) AS av FROM users WHERE sponsor=$1 AND status='active' ORDER BY id DESC", [req.u.code]))));
+// The mentor (sponsor) who referred the signed-in member.
+app.get('/api/mentor', auth, w(async (req, res) => {
+  if (!req.u.sponsor) return res.json({ mentor: null });
+  const [m] = await q(pool, "SELECT id,name,email,code,status,vip,(avatar IS NOT NULL) AS av FROM users WHERE code=$1", [req.u.sponsor]);
+  res.json({ mentor: m && m.status !== 'rejected' ? m : null });
+}));
+// Profile photo. Visible to the member, their sponsor, the admin, and (for today's top 10) to signed-in members on the leaderboard.
+app.get('/api/avatar/:id', auth, w(async (req, res) => {
+  const [u] = await q(pool, 'SELECT id,code,sponsor,avatar FROM users WHERE id=$1', [+req.params.id || 0]);
+  if (!u || !u.avatar) throw new E(404, 'Not found.');
+  if (!(u.id === req.u.id || u.sponsor === req.u.code || u.code === req.u.sponsor || req.admin || (await topToday()).some(r => r.id === u.id))) throw new E(404, 'Not found.');
+  const m = /^data:(image\/(?:png|jpeg|webp));base64,(.+)$/.exec(u.avatar);
+  if (!m) throw new E(404, 'Not found.');
+  res.set('Content-Type', m[1]); res.set('Cache-Control', 'private, max-age=600'); res.send(Buffer.from(m[2], 'base64'));
+}));
 // Today's top 10 earners (all members). "Today" resets at midnight India time.
-app.get('/api/leaderboard', auth, w(async (req, res) => {
-  const rows = await q(pool, `SELECT u.name,u.vip,SUM(l.amt) AS amt FROM ledger l JOIN users u ON u.id=l.uid
+// Today's top 10 earners (shared by the leaderboard and its photos). Cached for 30 seconds.
+let TOP = { at: 0, rows: [] };
+async function topToday() {
+  if (Date.now() - TOP.at < 30000) return TOP.rows;
+  const rows = await q(pool, `SELECT u.id,u.name,u.vip,(u.avatar IS NOT NULL) AS av,SUM(l.amt) AS amt FROM ledger l JOIN users u ON u.id=l.uid
     WHERE u.status='active' AND u.email<>$1 AND l.at >= (date_trunc('day',${IST})) AT TIME ZONE 'Asia/Kolkata'
     GROUP BY u.id ORDER BY amt DESC, u.id LIMIT 10`, [AE]);
-  res.json(rows.map(r => ({ name: r.name, vip: r.vip, amt: num(r.amt) })));
+  TOP = { at: Date.now(), rows }; return rows;
+}
+app.get('/api/leaderboard', auth, w(async (req, res) => {
+  res.json((await topToday()).map(r => ({ id: r.id, name: r.name, vip: r.vip, av: !!r.av, amt: num(r.amt) })));
 }));
 
 // Upgrade a team member to a higher package. Wallet pays the price difference.
@@ -215,6 +242,19 @@ app.get('/api/wallet/requests', auth, w(async (req, res) =>
   res.json(await q(pool, "SELECT r.id,r.pkg,r.status,r.at,u.name,u.vip,u.email,u.phone FROM reqs r JOIN users u ON u.id=r.uid WHERE r.sponsor=$1 AND u.status<>'rejected' ORDER BY (r.status='pending') DESC,r.id DESC", [req.u.code]))));
 
 // Approve a wallet account request: wallet debit, activate, earning, passive income. One transaction.
+// Reject an account request: the ID is removed everywhere (pending / active / all) and is not counted.
+app.post('/api/wallet/requests/:id/reject', auth, w(async (req, res) => {
+  res.json(await tx(async c => {
+    const [me] = await q(c, 'SELECT id,code FROM users WHERE id=$1', [req.u.id]);
+    const [r] = await q(c, "SELECT id,uid FROM reqs WHERE id=$1 AND sponsor=$2 AND status='pending' FOR UPDATE", [req.params.id, me.code]);
+    if (!r) throw new E(404, 'Request not found or already handled.');
+    await c.query("UPDATE reqs SET status='rejected' WHERE id=$1", [r.id]);
+    await c.query("UPDATE users SET status='rejected', email='rejected-'||id||'@removed.invalid' WHERE id=$1 AND status='pending'", [r.uid]);
+    await c.query('DELETE FROM sessions WHERE uid=$1', [r.uid]);
+    return { ok: true };
+  }));
+}));
+
 app.post('/api/wallet/requests/:id/approve', auth, w(async (req, res) => {
   res.json(await tx(async c => {
     const [me] = await q(c, 'SELECT id,code,sponsor,wallet,name,pkg FROM users WHERE id=$1 FOR UPDATE', [req.u.id]);
@@ -286,7 +326,7 @@ app.post('/api/admin/pays/:id/:act', auth, adm, w(async (req, res) => {
 }));
 
 // Open /api/health in the browser to see which server version is live.
-app.get('/api/health', (req, res) => res.json({ ok: true, version: '2026-10-06-f' }));
+app.get('/api/health', (req, res) => res.json({ ok: true, version: '2026-10-07-j' }));
 // Every page (/courses, /about, /login ...) is the same app file; the app reads the address and shows the right page.
 app.get('*', (req, res) => req.path.startsWith('/api/') ? res.status(404).json({ error: 'Not found' }) : res.sendFile(path.join(__dirname, 'index.html')));
 init().then(() => app.listen(process.env.PORT || 3000, () => console.log('Server running'))).catch(e => { console.error(e); process.exit(1); });
