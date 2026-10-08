@@ -91,7 +91,7 @@ app.get('/api/available', limit(30), w(async (req, res) => {
 app.post('/api/register', limit(10), w(async (req, res) => {
   const { name, email, phone, password, sponsor, pkg, method, app: ap } = req.body, k = +pkg;
   if (!name || !email || !phone || !password || !(k >= 0 && k < 5)) throw new E(400, 'Fill in all fields.');
-  if (String(password).length < 8 || String(password).length > 72) throw new E(400, 'Password needs 8 to 72 characters.');
+  if (String(password).length < 6 || String(password).length > 72) throw new E(400, 'Password needs 6 to 72 characters.');
   if (String(name).length > 60 || String(email).length > 120 || String(phone).length > 20) throw new E(400, 'One of the fields is too long.');
   if (!/^\S+@\S+\.\S+$/.test(email)) throw new E(400, 'Enter a valid email.');
   if (String(phone).replace(/\D/g, '').length < 10) throw new E(400, 'Enter a 10-digit phone number.');
@@ -110,12 +110,10 @@ app.post('/api/register', limit(10), w(async (req, res) => {
 }));
 
 const DUMMY = bcrypt.hashSync('not-a-real-password', 10);
-app.post('/api/login', limit(10), w(async (req, res) => {
+app.post('/api/login', limit(60), w(async (req, res) => {
   const [u] = await q(pool, 'SELECT id,pw,status,locked FROM users WHERE email=$1', [String(req.body.email || '').toLowerCase().slice(0, 120)]);
-  if (u && u.locked && new Date(u.locked) > new Date()) throw new E(429, 'Too many wrong attempts. Try again in 15 minutes.');
   const ok = await bcrypt.compare(String(req.body.password || '').slice(0, 72), u ? u.pw : DUMMY);
   if (!u || !ok) {
-    if (u) await pool.query("UPDATE users SET fails=CASE WHEN fails+1>=5 THEN 0 ELSE fails+1 END, locked=CASE WHEN fails+1>=5 THEN now()+interval '15 minutes' ELSE locked END WHERE id=$1", [u.id]);
     throw new E(401, 'Email or password is wrong.');
   }
   if (u.status === 'suspended') throw new E(403, 'Your account is suspended. Please contact support.');
@@ -144,13 +142,17 @@ app.get('/api/me', auth, w(async (req, res) => {
     FROM generate_series((${IST})::date-6,(${IST})::date,'1 day') d
     LEFT JOIN ledger l ON l.uid=$1 AND (l.at AT TIME ZONE 'Asia/Kolkata')::date=d::date GROUP BY d ORDER BY d`, [u.id]);
   const [t] = await q(pool, "SELECT count(*)::int AS n FROM users WHERE sponsor=$1 AND status='active'", [u.code]);
+  // Newest pending item ids, so the app can show a red dot until the member has looked at it.
+  const [n] = await q(pool, `SELECT (SELECT COALESCE(MAX(r.id),0) FROM reqs r JOIN users x ON x.id=r.uid WHERE r.sponsor=$1 AND r.status='pending' AND x.status='pending')::int AS rq,
+    ${req.admin ? "(SELECT COALESCE(MAX(p.id),0) FROM pays p JOIN users x ON x.id=p.uid WHERE p.status='pending' AND x.status<>'rejected')::int" : '0'} AS pay,
+    ${req.admin ? "(SELECT COALESCE(MAX(id),0) FROM users WHERE status='pending')::int" : '0'} AS mem`, [u.code]);
   res.json({ name: u.name, email: u.email, phone: u.phone, code: u.code, pkg: u.pkg, avatar: u.avatar, wallet: num(u.wallet), cashback: num(u.cashback), vip: !!u.vip, admin: req.admin,
-    earn: { today: num(e.today), d7: num(e.d7), d30: num(e.d30), total: num(e.total) }, chart: chart.map(r => ({ l: r.l, v: num(r.v) })), team: t.n });
+    earn: { today: num(e.today), d7: num(e.d7), d30: num(e.d30), total: num(e.total) }, chart: chart.map(r => ({ l: r.l, v: num(r.v) })), team: t.n, nt: { rq: n.rq, pay: n.pay, mem: n.mem } });
 }));
 app.put('/api/me', auth, w(async (req, res) => {
   const n = String(req.body.name || '').trim(), p = String(req.body.phone || '').trim(), pw = String(req.body.password || '');
   if (!n || n.length > 60 || p.length > 20 || p.replace(/\D/g, '').length < 10) throw new E(400, 'Enter a valid name and phone.');
-  if (pw && (pw.length < 8 || pw.length > 72)) throw new E(400, 'New password needs 8 to 72 characters.');
+  if (pw && (pw.length < 6 || pw.length > 72)) throw new E(400, 'New password needs 6 to 72 characters.');
   await pool.query('UPDATE users SET name=$1,phone=$2 WHERE id=$3', [n, p, req.u.id]);
   if (pw) { // new password: save it and sign out every other device
     await pool.query('UPDATE users SET pw=$1 WHERE id=$2', [await bcrypt.hash(pw, 10), req.u.id]);
@@ -283,14 +285,25 @@ app.get('/api/admin/stats', auth, adm, w(async (req, res) => {
 }));
 // Admin only: every member with package and status. Suspend / un-suspend, and VIP on / off.
 app.get('/api/admin/members', auth, adm, w(async (req, res) =>
-  res.json(await q(pool, "SELECT id,name,email,phone,code,pkg,status,vip,at FROM users WHERE email<>$1 AND status<>'rejected' ORDER BY id DESC LIMIT 1000", [AE]))));
+  res.json(await q(pool, `SELECT u.id,u.name,u.email,u.phone,u.code,u.pkg,u.status,u.vip,u.at,u.sponsor,s.name AS sname,
+    EXISTS(SELECT 1 FROM reqs r WHERE r.uid=u.id) AS wal,
+    (SELECT p.app FROM pays p WHERE p.uid=u.id AND p.kind<>'recharge' ORDER BY p.id DESC LIMIT 1) AS upi,
+    (SELECT p.amt FROM pays p WHERE p.uid=u.id AND p.kind<>'recharge' ORDER BY p.id DESC LIMIT 1) AS upiamt
+    FROM users u LEFT JOIN users s ON s.code=u.sponsor WHERE u.email<>$1 AND u.status<>'rejected' ORDER BY u.id DESC LIMIT 1000`, [AE]))));
 app.post('/api/admin/members/:id/:act', auth, adm, w(async (req, res) => {
   const a = req.params.act, on = !!req.body.on;
-  if (!['vip', 'suspend'].includes(a)) throw new E(400, 'Bad action.');
+  if (!['vip', 'suspend', 'remove'].includes(a)) throw new E(400, 'Bad action.');
   await tx(async c => {
     const [m] = await q(c, 'SELECT id,status FROM users WHERE id=$1 AND email<>$2 FOR UPDATE', [req.params.id, AE]);
     if (!m) throw new E(404, 'Member not found.');
     if (a === 'vip') await c.query('UPDATE users SET vip=$1 WHERE id=$2', [on, m.id]);
+    else if (a === 'remove') { // delete a pending ID: it disappears everywhere and its email is freed
+      if (m.status !== 'pending') throw new E(400, 'Only pending IDs can be deleted.');
+      await c.query("UPDATE users SET status='rejected', email='rejected-'||id||'@removed.invalid' WHERE id=$1", [m.id]);
+      await c.query("UPDATE reqs SET status='rejected' WHERE uid=$1 AND status='pending'", [m.id]);
+      await c.query("UPDATE pays SET status='rejected' WHERE uid=$1 AND status='pending'", [m.id]);
+      await c.query('DELETE FROM sessions WHERE uid=$1', [m.id]);
+    }
     else if (on) {
       if (m.status !== 'active') throw new E(400, 'Only active members can be suspended.');
       await c.query("UPDATE users SET status='suspended' WHERE id=$1", [m.id]);
@@ -299,7 +312,7 @@ app.post('/api/admin/members/:id/:act', auth, adm, w(async (req, res) => {
       if (m.status !== 'suspended') throw new E(400, 'This member is not suspended.');
       await c.query("UPDATE users SET status='active' WHERE id=$1", [m.id]);
     }
-    await c.query('INSERT INTO admin_log(admin,action,target) VALUES($1,$2,$3)', [req.u.id, a + (on ? ' on' : ' off'), m.id]);
+    await c.query('INSERT INTO admin_log(admin,action,target) VALUES($1,$2,$3)', [req.u.id, a === 'remove' ? 'delete pending id' : a + (on ? ' on' : ' off'), m.id]);
   });
   res.json({ ok: true });
 }));
@@ -326,7 +339,7 @@ app.post('/api/admin/pays/:id/:act', auth, adm, w(async (req, res) => {
 }));
 
 // Open /api/health in the browser to see which server version is live.
-app.get('/api/health', (req, res) => res.json({ ok: true, version: '2026-10-07-j' }));
+app.get('/api/health', (req, res) => res.json({ ok: true, version: '2026-10-08-l' }));
 // Every page (/courses, /about, /login ...) is the same app file; the app reads the address and shows the right page.
 app.get('*', (req, res) => req.path.startsWith('/api/') ? res.status(404).json({ error: 'Not found' }) : res.sendFile(path.join(__dirname, 'index.html')));
 init().then(() => app.listen(process.env.PORT || 3000, () => console.log('Server running'))).catch(e => { console.error(e); process.exit(1); });
