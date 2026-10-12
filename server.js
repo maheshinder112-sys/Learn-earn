@@ -5,7 +5,7 @@ const AE = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
 if (!DATABASE_URL || !AE || !ADMIN_PASSWORD || ADMIN_PASSWORD.length < 10) { console.error('Set DATABASE_URL, ADMIN_EMAIL and ADMIN_PASSWORD (at least 10 characters).'); process.exit(1); }
 const PRICE = [999, 2499, 4999, 9999, 14999], DEBIT = [299, 749, 1499, 2999, 4499], COMM = [700, 1750, 3500, 7000, 10500];
 const CASHBACK = [1120, 1830, 2980, 3670, 3910], CB_MIN = 5000, LEVEL = ['Marketing', 'Branding', 'Traffic', 'Influence', 'Finance']; // cashback per activated ID; it can move to the wallet once it reaches CB_MIN
-const PASSIVE = PRICE.map(p => Math.round(p / 10)), ROOT = 'TRS-LEARN00001';
+const PASSIVE = PRICE.map(p => Math.round(p / 10)), ROOT = 'LRS-LEARN00001';
 
 const pool = new Pool({ connectionString: DATABASE_URL, ssl: /localhost|127\.0\.0\.1/.test(DATABASE_URL || '') ? false : { rejectUnauthorized: false } });
 const app = express(); app.set('trust proxy', 1); app.use(express.json({ limit: '400kb' }));
@@ -28,12 +28,12 @@ const w = f => (req, res) => f(req, res).catch(e => e.s ? res.status(e.s).json({
   : (console.error(e), res.status(500).json({ error: 'Server error' })));
 async function tx(f) { const c = await pool.connect(); try { await c.query('BEGIN'); const r = await f(c); await c.query('COMMIT'); return r; } catch (e) { await c.query('ROLLBACK'); throw e; } finally { c.release(); } }
 const q = (c, s, p) => c.query(s, p).then(r => r.rows);
-const num = Number, newCode = () => 'TRS-' + Array.from({ length: 10 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 32)]).join('');
+const num = Number, normCode = c => String(c || '').trim().toUpperCase().replace(/^TRS-/, 'LRS-'), newCode = () => 'LRS-' + Array.from({ length: 10 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 32)]).join('');
 const addTx = (c, uid, type, amt, bal, why) => c.query('INSERT INTO txns(uid,type,amt,bal,why) VALUES($1,$2,$3,$4,$5)', [uid, type, amt, bal, why]);
 // Every newly activated ID gets cashback according to its own package level.
 async function giveCashback(c, uid, pkg) {
   const [cb] = await q(c, 'UPDATE users SET cashback=cashback+$1 WHERE id=$2 RETURNING cashback', [CASHBACK[pkg], uid]);
-  await c.query("INSERT INTO cb_log(uid,type,amt,bal,why) VALUES($1,'credit',$2,$3,$4)", [uid, CASHBACK[pkg], cb.cashback, 'Cashback: ' + LEVEL[pkg] + ' Mastery ID activated']);
+  await c.query("INSERT INTO cb_log(uid,type,amt,bal,why) VALUES($1,'credit',$2,$3,$4)", [uid, CASHBACK[pkg], cb.cashback, 'Cashback: ' + LEVEL[pkg] + ' course ID activated']);
 }
 const earn = (c, uid, amt, why) => c.query('INSERT INTO ledger(uid,amt,why) VALUES($1,$2,$3)', [uid, amt, why]);
 // Passive income: credit the sponsor's wallet and their earnings.
@@ -57,6 +57,8 @@ async function init() {
   CREATE TABLE IF NOT EXISTS pays(id SERIAL PRIMARY KEY,uid INT REFERENCES users(id),kind TEXT NOT NULL,amt NUMERIC(12,2) NOT NULL CHECK(amt>0),app TEXT,pkg SMALLINT,status TEXT DEFAULT 'pending',at TIMESTAMPTZ DEFAULT now());`);
   // Upgrade tables made by older versions of this server.
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS fails INT NOT NULL DEFAULT 0; ALTER TABLE users ADD COLUMN IF NOT EXISTS locked TIMESTAMPTZ; ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar TEXT; ALTER TABLE users ADD COLUMN IF NOT EXISTS cashback NUMERIC(12,2) NOT NULL DEFAULT 0; ALTER TABLE users ADD COLUMN IF NOT EXISTS vip BOOLEAN NOT NULL DEFAULT false;');
+  // Referral codes moved from TRS- to LRS-. Old codes (and every sponsor link) are converted together, once.
+  await pool.query("UPDATE users SET code='LRS-'||substr(code,5) WHERE code LIKE 'TRS-%'; UPDATE users SET sponsor='LRS-'||substr(sponsor,5) WHERE sponsor LIKE 'TRS-%'; UPDATE reqs SET sponsor='LRS-'||substr(sponsor,5) WHERE sponsor LIKE 'TRS-%';");
   setInterval(() => pool.query('DELETE FROM sessions WHERE exp<now()').catch(() => {}), 3600000).unref();
   // The admin account always matches ADMIN_EMAIL / ADMIN_PASSWORD from Render (so a forgotten password can be reset there).
   await pool.query("INSERT INTO users(name,email,phone,pw,code,pkg,status) VALUES('Admin',$1,'0000000000',$2,$3,0,'active') ON CONFLICT (email) DO UPDATE SET pw=EXCLUDED.pw,status='active',fails=0,locked=NULL", [AE, await bcrypt.hash(ADMIN_PASSWORD, 10), ROOT]);
@@ -79,7 +81,7 @@ const auth = async (req, res, next) => {
 const adm = (req, res, next) => req.admin ? next() : res.status(403).json({ error: 'Admin only.' });
 
 app.get('/api/verify', limit(30), w(async (req, res) => {
-  const [s] = await q(pool, "SELECT name FROM users WHERE code=$1 AND status='active'", [String(req.query.code || '').trim().toUpperCase()]);
+  const [s] = await q(pool, "SELECT name FROM users WHERE code=$1 AND status='active'", [normCode(req.query.code)]);
   if (!s) throw new E(404, 'Referral code not found.'); res.json({ name: s.name });
 }));
 
@@ -98,9 +100,9 @@ app.post('/api/register', limit(10), w(async (req, res) => {
   if (!['wallet', 'upi'].includes(method)) throw new E(400, 'Choose a payment method.');
   const hash = await bcrypt.hash(String(password), 10);
   await tx(async c => {
-    let sp = String(sponsor || '').trim().toUpperCase();
-    if (sp) { if (!(await q(c, "SELECT 1 FROM users WHERE code=$1 AND status='active'", [sp])).length) throw new E(404, 'TRS code not found.'); }
-    else if (method === 'wallet') throw new E(400, 'TRS code is required for Wallet payment.');
+    let sp = normCode(sponsor);
+    if (sp) { if (!(await q(c, "SELECT 1 FROM users WHERE code=$1 AND status='active'", [sp])).length) throw new E(404, 'LRS code not found.'); }
+    else if (method === 'wallet') throw new E(400, 'LRS code is required for Wallet payment.');
     else { const [a] = await q(c, 'SELECT code FROM users WHERE email=$1', [AE]); sp = a ? a.code : ROOT; }
     const [u] = await q(c, 'INSERT INTO users(name,email,phone,pw,code,sponsor,pkg) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id', [name.trim(), email.toLowerCase(), phone, hash, newCode(), sp, k]);
     if (method === 'wallet') await c.query('INSERT INTO reqs(sponsor,uid,pkg) VALUES($1,$2,$3)', [sp, u.id, k]);
@@ -207,7 +209,7 @@ app.post('/api/team/:id/upgrade', auth, w(async (req, res) => {
     if (!m) throw new E(404, 'Member not found.');
     if (k <= m.pkg) throw new E(400, 'You can only upgrade to a higher package.');
     // A member cannot upgrade a team member above their own course. The admin is not limited.
-    if (!req.admin && k > me.pkg) throw new E(403, LEVEL[k] + ' Mastery is higher than your course. Upgrade your own course to ' + LEVEL[k] + ' Mastery or higher first.');
+    if (!req.admin && k > me.pkg) throw new E(403, 'The ' + LEVEL[k] + ' course is higher than your course. Upgrade your own course to ' + LEVEL[k] + ' or higher first.');
     const d = DEBIT[k] - DEBIT[m.pkg];
     if (num(me.wallet) < d) throw new E(402, 'Insufficient wallet balance. Please recharge your wallet.');
     const [nw] = await q(c, 'UPDATE users SET wallet=wallet-$1 WHERE id=$2 RETURNING wallet', [d, me.id]);
@@ -263,7 +265,7 @@ app.post('/api/wallet/requests/:id/approve', auth, w(async (req, res) => {
     const [r] = await q(c, "SELECT r.id,r.uid,r.pkg,u.name FROM reqs r JOIN users u ON u.id=r.uid WHERE r.id=$1 AND r.sponsor=$2 AND r.status='pending' FOR UPDATE OF r", [req.params.id, me.code]);
     if (!r) throw new E(404, 'Request not found or already approved.');
     // A member can only approve a course at or below their own course. The admin is not limited.
-    if (!req.admin && r.pkg > me.pkg) throw new E(403, 'This request is for ' + LEVEL[r.pkg] + ' Mastery, which is higher than your course. Upgrade your course to ' + LEVEL[r.pkg] + ' Mastery or higher to approve it.');
+    if (!req.admin && r.pkg > me.pkg) throw new E(403, 'This request is for the ' + LEVEL[r.pkg] + ' course, which is higher than your course. Upgrade your course to ' + LEVEL[r.pkg] + ' or higher to approve it.');
     if (num(me.wallet) < DEBIT[r.pkg]) throw new E(402, 'Insufficient wallet balance. Please recharge your wallet.');
     const [nw] = await q(c, 'UPDATE users SET wallet=wallet-$1 WHERE id=$2 RETURNING wallet', [DEBIT[r.pkg], me.id]);
     await addTx(c, me.id, 'debit', DEBIT[r.pkg], nw.wallet, 'Account activation: ' + r.name);
@@ -339,7 +341,7 @@ app.post('/api/admin/pays/:id/:act', auth, adm, w(async (req, res) => {
 }));
 
 // Open /api/health in the browser to see which server version is live.
-app.get('/api/health', (req, res) => res.json({ ok: true, version: '2026-10-08-l' }));
+app.get('/api/health', (req, res) => res.json({ ok: true, version: '2026-10-09-n' }));
 // Every page (/courses, /about, /login ...) is the same app file; the app reads the address and shows the right page.
 app.get('*', (req, res) => req.path.startsWith('/api/') ? res.status(404).json({ error: 'Not found' }) : res.sendFile(path.join(__dirname, 'index.html')));
 init().then(() => app.listen(process.env.PORT || 3000, () => console.log('Server running'))).catch(e => { console.error(e); process.exit(1); });
