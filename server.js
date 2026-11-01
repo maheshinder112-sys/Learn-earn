@@ -54,9 +54,12 @@ async function init() {
   CREATE TABLE IF NOT EXISTS ledger(id SERIAL PRIMARY KEY,uid INT REFERENCES users(id),amt NUMERIC(12,2) NOT NULL,why TEXT,at TIMESTAMPTZ DEFAULT now());
   CREATE TABLE IF NOT EXISTS txns(id SERIAL PRIMARY KEY,uid INT REFERENCES users(id),type TEXT NOT NULL,amt NUMERIC(12,2) NOT NULL,bal NUMERIC(12,2) NOT NULL,why TEXT,at TIMESTAMPTZ DEFAULT now());
   CREATE TABLE IF NOT EXISTS reqs(id SERIAL PRIMARY KEY,sponsor TEXT NOT NULL,uid INT UNIQUE REFERENCES users(id),pkg SMALLINT NOT NULL,status TEXT DEFAULT 'pending',at TIMESTAMPTZ DEFAULT now());
+  CREATE TABLE IF NOT EXISTS pwreq(id SERIAL PRIMARY KEY,uid INT REFERENCES users(id),phone TEXT,note TEXT,status TEXT NOT NULL DEFAULT 'pending',at TIMESTAMPTZ DEFAULT now(),done TIMESTAMPTZ);
   CREATE TABLE IF NOT EXISTS pays(id SERIAL PRIMARY KEY,uid INT REFERENCES users(id),kind TEXT NOT NULL,amt NUMERIC(12,2) NOT NULL CHECK(amt>0),app TEXT,pkg SMALLINT,status TEXT DEFAULT 'pending',at TIMESTAMPTZ DEFAULT now());`);
   // Upgrade tables made by older versions of this server.
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS fails INT NOT NULL DEFAULT 0; ALTER TABLE users ADD COLUMN IF NOT EXISTS locked TIMESTAMPTZ; ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar TEXT; ALTER TABLE users ADD COLUMN IF NOT EXISTS cashback NUMERIC(12,2) NOT NULL DEFAULT 0; ALTER TABLE users ADD COLUMN IF NOT EXISTS vip BOOLEAN NOT NULL DEFAULT false;');
+  // UTR (UPI transaction number) for every UPI payment. The same UTR cannot be used twice.
+  await pool.query("ALTER TABLE pays ADD COLUMN IF NOT EXISTS utr TEXT; CREATE UNIQUE INDEX IF NOT EXISTS pays_utr_once ON pays(utr) WHERE utr IS NOT NULL AND status<>'rejected';");
   // Referral codes moved from TRS- to LRS-. Old codes (and every sponsor link) are converted together, once.
   await pool.query("UPDATE users SET code='LRS-'||substr(code,5) WHERE code LIKE 'TRS-%'; UPDATE users SET sponsor='LRS-'||substr(sponsor,5) WHERE sponsor LIKE 'TRS-%'; UPDATE reqs SET sponsor='LRS-'||substr(sponsor,5) WHERE sponsor LIKE 'TRS-%';");
   setInterval(() => pool.query('DELETE FROM sessions WHERE exp<now()').catch(() => {}), 3600000).unref();
@@ -98,19 +101,23 @@ app.post('/api/register', limit(10), w(async (req, res) => {
   if (!/^\S+@\S+\.\S+$/.test(email)) throw new E(400, 'Enter a valid email.');
   if (String(phone).replace(/\D/g, '').length < 10) throw new E(400, 'Enter a 10-digit phone number.');
   if (!['wallet', 'upi'].includes(method)) throw new E(400, 'Choose a payment method.');
+  const utr = method === 'upi' ? UTR(req.body.utr) : null;
   const hash = await bcrypt.hash(String(password), 10);
   await tx(async c => {
+    if (utr) await utrUsed(c, utr);
     let sp = normCode(sponsor);
     if (sp) { if (!(await q(c, "SELECT 1 FROM users WHERE code=$1 AND status='active'", [sp])).length) throw new E(404, 'LRS code not found.'); }
     else if (method === 'wallet') throw new E(400, 'LRS code is required for Wallet payment.');
     else { const [a] = await q(c, 'SELECT code FROM users WHERE email=$1', [AE]); sp = a ? a.code : ROOT; }
     const [u] = await q(c, 'INSERT INTO users(name,email,phone,pw,code,sponsor,pkg) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id', [name.trim(), email.toLowerCase(), phone, hash, newCode(), sp, k]);
     if (method === 'wallet') await c.query('INSERT INTO reqs(sponsor,uid,pkg) VALUES($1,$2,$3)', [sp, u.id, k]);
-    else await c.query("INSERT INTO pays(uid,kind,amt,app,pkg) VALUES($1,'buy',$2,$3,$4)", [u.id, PRICE[k], ap || 'UPI', k]);
+    else await c.query("INSERT INTO pays(uid,kind,amt,app,pkg,utr) VALUES($1,'buy',$2,$3,$4,$5)", [u.id, PRICE[k], String(ap || 'UPI').slice(0, 30), k, utr]);
   });
   res.status(201).json({ ok: true, method });
 }));
 
+const UTR = v => { const u = String(v || '').replace(/\s/g, ''); if (!/^\d{12}$/.test(u)) throw new E(400, 'Enter the 12-digit UTR number from your UPI app.'); return u; };
+const utrUsed = async (c, u) => { if ((await q(c, "SELECT 1 FROM pays WHERE utr=$1 AND status<>'rejected'", [u])).length) throw new E(409, 'This UTR number has already been used.'); };
 const DUMMY = bcrypt.hashSync('not-a-real-password', 10);
 app.post('/api/login', limit(60), w(async (req, res) => {
   const [u] = await q(pool, 'SELECT id,pw,status,locked FROM users WHERE email=$1', [String(req.body.email || '').toLowerCase().slice(0, 120)]);
@@ -122,6 +129,20 @@ app.post('/api/login', limit(60), w(async (req, res) => {
   if (u.status !== 'active') throw new E(403, 'Your account is waiting for approval.');
   await pool.query('UPDATE users SET fails=0,locked=NULL WHERE id=$1', [u.id]);
   await startSession(req, res, u.id); res.json({ ok: true });
+}));
+// Forgot password: the member sends a request; the admin checks it and sets a new password.
+// The reply is always the same, so nobody can use this page to find out which emails have an ID.
+const digits = p => String(p || '').replace(/\D/g, '').slice(-10);
+app.post('/api/forgot', limit(5), w(async (req, res) => {
+  const email = String(req.body.email || '').trim().toLowerCase().slice(0, 120), phone = String(req.body.phone || '').trim().slice(0, 20), note = String(req.body.note || '').trim().slice(0, 200);
+  if (!/^\S+@\S+\.\S+$/.test(email)) throw new E(400, 'Enter a valid email.');
+  if (digits(phone).length < 10) throw new E(400, 'Enter your 10-digit phone number.');
+  const [u] = await q(pool, "SELECT id FROM users WHERE email=$1 AND email<>$2 AND status IN ('active','suspended')", [email, AE]);
+  if (u) await tx(async c => {
+    await c.query("DELETE FROM pwreq WHERE uid=$1 AND status='pending'", [u.id]); // keep only the newest request
+    await c.query('INSERT INTO pwreq(uid,phone,note) VALUES($1,$2,$3)', [u.id, phone, note || null]);
+  });
+  res.json({ ok: true });
 }));
 app.post('/api/logout', w(async (req, res) => {
   const t = getSid(req); if (t) await pool.query('DELETE FROM sessions WHERE h=$1', [sha(t)]);
@@ -147,9 +168,11 @@ app.get('/api/me', auth, w(async (req, res) => {
   // Newest pending item ids, so the app can show a red dot until the member has looked at it.
   const [n] = await q(pool, `SELECT (SELECT COALESCE(MAX(r.id),0) FROM reqs r JOIN users x ON x.id=r.uid WHERE r.sponsor=$1 AND r.status='pending' AND x.status='pending')::int AS rq,
     ${req.admin ? "(SELECT COALESCE(MAX(p.id),0) FROM pays p JOIN users x ON x.id=p.uid WHERE p.status='pending' AND x.status<>'rejected')::int" : '0'} AS pay,
-    ${req.admin ? "(SELECT COALESCE(MAX(id),0) FROM users WHERE status='pending')::int" : '0'} AS mem`, [u.code]);
+    ${req.admin ? "(SELECT COALESCE(MAX(id),0) FROM users WHERE status='pending')::int" : '0'} AS mem,
+    ${req.admin ? "(SELECT COALESCE(MAX(id),0) FROM pwreq WHERE status='pending')::int" : '0'} AS rs`, [u.code]);
+  const [up] = await q(pool, "SELECT pkg FROM pays WHERE uid=$1 AND kind='upgrade' AND status='pending' ORDER BY id DESC LIMIT 1", [u.id]);
   res.json({ name: u.name, email: u.email, phone: u.phone, code: u.code, pkg: u.pkg, avatar: u.avatar, wallet: num(u.wallet), cashback: num(u.cashback), vip: !!u.vip, admin: req.admin,
-    earn: { today: num(e.today), d7: num(e.d7), d30: num(e.d30), total: num(e.total) }, chart: chart.map(r => ({ l: r.l, v: num(r.v) })), team: t.n, nt: { rq: n.rq, pay: n.pay, mem: n.mem } });
+    earn: { today: num(e.today), d7: num(e.d7), d30: num(e.d30), total: num(e.total) }, chart: chart.map(r => ({ l: r.l, v: num(r.v) })), team: t.n, upg: up ? up.pkg : null, nt: { rq: n.rq, pay: n.pay, mem: n.mem, rs: n.rs } });
 }));
 app.put('/api/me', auth, w(async (req, res) => {
   const n = String(req.body.name || '').trim(), p = String(req.body.phone || '').trim(), pw = String(req.body.password || '');
@@ -174,7 +197,7 @@ app.get('/api/team', auth, w(async (req, res) =>
 // The mentor (sponsor) who referred the signed-in member.
 app.get('/api/mentor', auth, w(async (req, res) => {
   if (!req.u.sponsor) return res.json({ mentor: null });
-  const [m] = await q(pool, "SELECT id,name,email,code,status,vip,(avatar IS NOT NULL) AS av FROM users WHERE code=$1", [req.u.sponsor]);
+  const [m] = await q(pool, "SELECT id,name,email,phone,code,status,vip,(avatar IS NOT NULL) AS av FROM users WHERE code=$1", [req.u.sponsor]);
   res.json({ mentor: m && m.status !== 'rejected' ? m : null });
 }));
 // Profile photo. Visible to the member, their sponsor, the admin, and (for today's top 10) to signed-in members on the leaderboard.
@@ -240,7 +263,9 @@ app.post('/api/wallet/cashback/transfer', auth, w(async (req, res) => {
 app.post('/api/wallet/recharge', auth, limit(20), w(async (req, res) => {
   const a = num(req.body.amount); if (!(a > 0 && a <= 1e6)) throw new E(400, 'Enter a valid amount.');
   if ((await q(pool, "SELECT 1 FROM pays WHERE uid=$1 AND status='pending' AND kind='recharge' OFFSET 4", [req.u.id])).length) throw new E(429, 'You already have several pending recharges. Please wait for them to be verified.');
-  await pool.query("INSERT INTO pays(uid,kind,amt,app) VALUES($1,'recharge',$2,$3)", [req.u.id, a, String(req.body.app || 'UPI').slice(0, 30)]); res.status(201).json({ ok: true });
+  const utr = UTR(req.body.utr);
+  await tx(async c => { await utrUsed(c, utr); await c.query("INSERT INTO pays(uid,kind,amt,app,utr) VALUES($1,'recharge',$2,$3,$4)", [req.u.id, a, String(req.body.app || 'UPI').slice(0, 30), utr]); });
+  res.status(201).json({ ok: true });
 }));
 app.get('/api/wallet/requests', auth, w(async (req, res) =>
   res.json(await q(pool, "SELECT r.id,r.pkg,r.status,r.at,u.name,u.vip,u.email,u.phone FROM reqs r JOIN users u ON u.id=r.uid WHERE r.sponsor=$1 AND u.status<>'rejected' ORDER BY (r.status='pending') DESC,r.id DESC", [req.u.code]))));
@@ -280,6 +305,35 @@ app.post('/api/wallet/requests/:id/approve', auth, w(async (req, res) => {
 
 // Admin: verify UPI payments after checking the money arrived.
 // Admin only: totals from the database (the admin's own account is not counted as a member).
+// A member upgrades their own course by UPI. The admin checks the UTR in Verification; on confirm the course is upgraded.
+app.post('/api/upgrade', auth, limit(10), w(async (req, res) => {
+  const k = +req.body.pkg; if (!(k >= 0 && k < 5)) throw new E(400, 'Invalid course.');
+  const utr = UTR(req.body.utr);
+  await tx(async c => {
+    const [me] = await q(c, "SELECT id,pkg,status FROM users WHERE id=$1 FOR UPDATE", [req.u.id]);
+    if (me.status !== 'active') throw new E(403, 'Your ID is not active.');
+    if (k <= me.pkg) throw new E(400, 'You can only upgrade to a higher course.');
+    if ((await q(c, "SELECT 1 FROM pays WHERE uid=$1 AND kind='upgrade' AND status='pending'", [me.id])).length) throw new E(409, 'You already have an upgrade waiting for verification.');
+    await utrUsed(c, utr);
+    await c.query("INSERT INTO pays(uid,kind,amt,app,pkg,utr) VALUES($1,'upgrade',$2,$3,$4,$5)", [me.id, PRICE[k] - PRICE[me.pkg], String(req.body.app || 'UPI').slice(0, 30), k, utr]);
+  });
+  res.status(201).json({ ok: true });
+}));
+// A member upgrades their own course from their own wallet. The price difference is deducted and the course changes at once.
+app.post('/api/upgrade/wallet', auth, limit(10), w(async (req, res) => {
+  const k = +req.body.pkg; if (!(k >= 0 && k < 5)) throw new E(400, 'Invalid course.');
+  res.json(await tx(async c => {
+    const [me] = await q(c, 'SELECT id,pkg,status,wallet FROM users WHERE id=$1 FOR UPDATE', [req.u.id]);
+    if (me.status !== 'active') throw new E(403, 'Your ID is not active.');
+    if (k <= me.pkg) throw new E(400, 'You can only upgrade to a higher course.');
+    if ((await q(c, "SELECT 1 FROM pays WHERE uid=$1 AND kind='upgrade' AND status='pending'", [me.id])).length) throw new E(409, 'You already have an upgrade waiting for verification.');
+    const d = PRICE[k] - PRICE[me.pkg];
+    if (num(me.wallet) < d) throw new E(402, 'Insufficient wallet balance. Please add funds to your wallet.');
+    const [u] = await q(c, 'UPDATE users SET wallet=wallet-$1,pkg=$2 WHERE id=$3 RETURNING wallet', [d, k, me.id]);
+    await addTx(c, me.id, 'debit', d, u.wallet, 'Course upgrade to ' + LEVEL[k]);
+    return { wallet: num(u.wallet), pkg: k };
+  }));
+}));
 app.get('/api/admin/stats', auth, adm, w(async (req, res) => {
   const [m] = await q(pool, "SELECT count(*)::int AS n FROM users WHERE status='active' AND email<>$1", [AE]);
   const [e] = await q(pool, "SELECT COALESCE(SUM(l.amt),0) AS t FROM ledger l JOIN users u ON u.id=l.uid WHERE u.email<>$1", [AE]);
@@ -287,11 +341,39 @@ app.get('/api/admin/stats', auth, adm, w(async (req, res) => {
 }));
 // Admin only: every member with package and status. Suspend / un-suspend, and VIP on / off.
 app.get('/api/admin/members', auth, adm, w(async (req, res) =>
-  res.json(await q(pool, `SELECT u.id,u.name,u.email,u.phone,u.code,u.pkg,u.status,u.vip,u.at,u.sponsor,s.name AS sname,
+  res.json(await q(pool, `SELECT u.id,u.name,u.email,u.phone,u.code,u.pkg,u.status,u.vip,u.at,u.sponsor,u.wallet,u.cashback,s.name AS sname,
     EXISTS(SELECT 1 FROM reqs r WHERE r.uid=u.id) AS wal,
-    (SELECT p.app FROM pays p WHERE p.uid=u.id AND p.kind<>'recharge' ORDER BY p.id DESC LIMIT 1) AS upi,
-    (SELECT p.amt FROM pays p WHERE p.uid=u.id AND p.kind<>'recharge' ORDER BY p.id DESC LIMIT 1) AS upiamt
+    (SELECT p.app FROM pays p WHERE p.uid=u.id AND p.kind='buy' ORDER BY p.id DESC LIMIT 1) AS upi,
+    (SELECT p.amt FROM pays p WHERE p.uid=u.id AND p.kind='buy' ORDER BY p.id DESC LIMIT 1) AS upiamt
     FROM users u LEFT JOIN users s ON s.code=u.sponsor WHERE u.email<>$1 AND u.status<>'rejected' ORDER BY u.id DESC LIMIT 1000`, [AE]))));
+// Admin: everything about one member: balances, earnings, team and latest wallet entries.
+app.get('/api/admin/members/:id/full', auth, adm, w(async (req, res) => {
+  const [m] = await q(pool, "SELECT id,code,wallet,cashback FROM users WHERE id=$1 AND email<>$2 AND status<>'rejected'", [+req.params.id || 0, AE]);
+  if (!m) throw new E(404, 'Member not found.');
+  const [e] = await q(pool, `SELECT
+    COALESCE(SUM(amt) FILTER (WHERE at >= (date_trunc('day',${IST})) AT TIME ZONE 'Asia/Kolkata'),0) AS today,
+    COALESCE(SUM(amt) FILTER (WHERE at > now()-interval '7 days'),0) AS d7,
+    COALESCE(SUM(amt) FILTER (WHERE at > now()-interval '30 days'),0) AS d30,
+    COALESCE(SUM(amt),0) AS total FROM ledger WHERE uid=$1`, [m.id]);
+  const [t] = await q(pool, "SELECT count(*) FILTER (WHERE status='active')::int AS active, count(*) FILTER (WHERE status='pending')::int AS pending FROM users WHERE sponsor=$1", [m.code]);
+  const txns = await q(pool, 'SELECT type,amt,bal,why,at FROM txns WHERE uid=$1 ORDER BY id DESC LIMIT 15', [m.id]);
+  res.json({ wallet: num(m.wallet), cashback: num(m.cashback), earn: { today: num(e.today), d7: num(e.d7), d30: num(e.d30), total: num(e.total) }, team: t, txns });
+}));
+// Admin: add money to / deduct money from a member's wallet. Every change is written to the member's wallet log.
+app.post('/api/admin/members/:id/wallet', auth, adm, w(async (req, res) => {
+  const t = req.body.type, a = Math.round(num(req.body.amount) * 100) / 100, why = String(req.body.reason || '').trim().slice(0, 120);
+  if (!['add', 'deduct'].includes(t)) throw new E(400, 'Choose add or deduct.');
+  if (!(a > 0 && a <= 1e7)) throw new E(400, 'Enter a valid amount.');
+  res.json(await tx(async c => {
+    const [m] = await q(c, "SELECT id,wallet FROM users WHERE id=$1 AND email<>$2 AND status<>'rejected' FOR UPDATE", [+req.params.id || 0, AE]);
+    if (!m) throw new E(404, 'Member not found.');
+    if (t === 'deduct' && a > num(m.wallet)) throw new E(400, 'The wallet has only \u20b9' + num(m.wallet).toLocaleString('en-IN') + '. You cannot deduct more than that.');
+    const [u] = await q(c, 'UPDATE users SET wallet=wallet' + (t === 'add' ? '+' : '-') + '$1 WHERE id=$2 RETURNING wallet', [a, m.id]);
+    await addTx(c, m.id, t === 'add' ? 'credit' : 'debit', a, u.wallet, (t === 'add' ? 'Added by admin' : 'Deducted by admin') + (why ? ': ' + why : ''));
+    await c.query('INSERT INTO admin_log(admin,action,target) VALUES($1,$2,$3)', [req.u.id, 'wallet ' + t + ' ' + a, m.id]);
+    return { wallet: num(u.wallet) };
+  }));
+}));
 app.post('/api/admin/members/:id/:act', auth, adm, w(async (req, res) => {
   const a = req.params.act, on = !!req.body.on;
   if (!['vip', 'suspend', 'remove'].includes(a)) throw new E(400, 'Bad action.');
@@ -319,7 +401,7 @@ app.post('/api/admin/members/:id/:act', auth, adm, w(async (req, res) => {
   res.json({ ok: true });
 }));
 app.get('/api/admin/pays', auth, adm, w(async (req, res) =>
-  res.json(await q(pool, "SELECT p.id,p.kind,p.amt,p.app,p.pkg,p.status,p.at,u.name,u.vip,u.email FROM pays p JOIN users u ON u.id=p.uid WHERE u.status<>'rejected' ORDER BY (p.status='pending') DESC,p.id DESC LIMIT 200"))));
+  res.json(await q(pool, "SELECT p.id,p.kind,p.amt,p.app,p.pkg,p.utr,p.status,p.at,u.name,u.vip,u.email FROM pays p JOIN users u ON u.id=p.uid WHERE u.status<>'rejected' ORDER BY (p.status='pending') DESC,p.id DESC LIMIT 200"))));
 app.post('/api/admin/pays/:id/:act', auth, adm, w(async (req, res) => {
   if (!['confirm', 'reject'].includes(req.params.act)) throw new E(400, 'Bad action.');
   await tx(async c => {
@@ -327,11 +409,12 @@ app.post('/api/admin/pays/:id/:act', auth, adm, w(async (req, res) => {
     if (!p) throw new E(404, 'Payment not found or already handled.');
     if (req.params.act === 'confirm') {
       if (p.kind === 'recharge') { const [u] = await q(c, 'UPDATE users SET wallet=wallet+$1 WHERE id=$2 RETURNING wallet', [p.amt, p.uid]); await addTx(c, p.uid, 'credit', p.amt, u.wallet, 'Wallet recharge via ' + p.app); }
+      else if (p.kind === 'upgrade') await c.query('UPDATE users SET pkg=GREATEST(pkg,$1) WHERE id=$2', [p.pkg, p.uid]);
       else { await c.query("UPDATE users SET status='active' WHERE id=$1", [p.uid]); await giveCashback(c, p.uid, p.pkg); }
     }
     await c.query('UPDATE pays SET status=$1 WHERE id=$2', [req.params.act === 'confirm' ? 'confirmed' : 'rejected', p.id]);
     // A rejected sign-up ID disappears everywhere (pending / active / all). The email is released so the person can sign up again.
-    if (req.params.act === 'reject' && p.kind !== 'recharge') {
+    if (req.params.act === 'reject' && p.kind === 'buy') {
       await c.query("UPDATE users SET status='rejected', email='rejected-'||id||'@removed.invalid' WHERE id=$1 AND status='pending'", [p.uid]);
       await c.query('DELETE FROM sessions WHERE uid=$1', [p.uid]);
     }
@@ -340,8 +423,32 @@ app.post('/api/admin/pays/:id/:act', auth, adm, w(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// Admin: password requests. The admin checks the phone number and sets a new password.
+app.get('/api/admin/resets', auth, adm, w(async (req, res) => {
+  const rows = await q(pool, `SELECT r.id,r.phone,r.note,r.status,r.at,u.name,u.vip,u.email,u.phone AS rphone FROM pwreq r JOIN users u ON u.id=r.uid
+    WHERE u.status<>'rejected' ORDER BY (r.status='pending') DESC,r.id DESC LIMIT 100`);
+  res.json(rows.map(r => ({ ...r, match: digits(r.phone) === digits(r.rphone) })));
+}));
+app.post('/api/admin/resets/:id/:act', auth, adm, w(async (req, res) => {
+  const a = req.params.act; if (!['set', 'dismiss'].includes(a)) throw new E(400, 'Bad action.');
+  const pw = String(req.body.password || '');
+  if (a === 'set' && (pw.length < 6 || pw.length > 72)) throw new E(400, 'Password needs 6 to 72 characters.');
+  const hash = a === 'set' ? await bcrypt.hash(pw, 10) : null;
+  await tx(async c => {
+    const [r] = await q(c, "SELECT id,uid FROM pwreq WHERE id=$1 AND status='pending' FOR UPDATE", [+req.params.id || 0]);
+    if (!r) throw new E(404, 'Request not found or already handled.');
+    if (a === 'set') {
+      await c.query('UPDATE users SET pw=$1,fails=0,locked=NULL WHERE id=$2 AND email<>$3', [hash, r.uid, AE]);
+      await c.query('DELETE FROM sessions WHERE uid=$1', [r.uid]); // sign the member out everywhere
+    }
+    await c.query('UPDATE pwreq SET status=$1,done=now() WHERE id=$2', [a === 'set' ? 'done' : 'dismissed', r.id]);
+    await c.query('INSERT INTO admin_log(admin,action,target) VALUES($1,$2,$3)', [req.u.id, a === 'set' ? 'reset password' : 'dismiss password request', r.uid]);
+  });
+  res.json({ ok: true });
+}));
+
 // Open /api/health in the browser to see which server version is live.
-app.get('/api/health', (req, res) => res.json({ ok: true, version: '2026-10-09-n' }));
+app.get('/api/health', (req, res) => res.json({ ok: true, version: '2026-11-01-c' }));
 // Every page (/courses, /about, /login ...) is the same app file; the app reads the address and shows the right page.
 app.get('*', (req, res) => req.path.startsWith('/api/') ? res.status(404).json({ error: 'Not found' }) : res.sendFile(path.join(__dirname, 'index.html')));
 init().then(() => app.listen(process.env.PORT || 3000, () => console.log('Server running'))).catch(e => { console.error(e); process.exit(1); });
