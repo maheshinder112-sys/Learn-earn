@@ -1198,13 +1198,19 @@ async function bakDl(){const b=document.getElementById('bkd');b.disabled=true;b.
     const url=URL.createObjectURL(new Blob([txt],{type:'application/json'})),a=document.createElement('a');a.href=url;a.download='learn-and-earn-backup-'+day+'.json';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),600000);
     bkMsg('✓ Backup ready: learn-and-earn-backup-'+day+'.json — size <b>'+(txt.length/1024).toFixed(1)+' KB</b>, '+n+' accounts, '+(d.tables.pays||[]).length+' payments.<br>Open Files → Downloads and check the file is about this size (not 0 KB). If it is 0 KB, <a href="/api/admin/backup" download>tap here to download it directly</a>.',true)}
   catch(e){bkMsg(esc(e.message||'Download failed.'),false)}b.disabled=false;b.textContent='Download backup'}
-function bakPick(inp){const f=inp.files&&inp.files[0];inp.value='';if(!f)return;const info='<br><small>File chosen: <b>'+esc(f.name)+'</b> ('+(f.size/1024).toFixed(1)+' KB)</small>';
-  const rd=new FileReader();rd.onerror=()=>{BKF=null;bkMsg('Could not read this file. Try choosing it again from Files → Downloads.'+info,false)};
-  rd.onload=()=>{let t=String(rd.result||'').replace(/^\uFEFF/,'').trim(),why='';
-    if(!f.size||!t)why='This file is empty. Download the backup again.';
-    else if(t[0]!=='{')why='This is not the backup file. Choose the file named learn-and-earn-backup-….json.';
-    else{try{const d=JSON.parse(t);if(d.app==='learn-and-earn'&&d.tables&&Array.isArray(d.tables.users)){BKF=d;BKM='';return dash()}why='This file is not a Learn and Earn backup.'}catch(e){why='This backup file is incomplete or damaged. Download it again from the old database.'}}
-    BKF=null;bkMsg(why+info,false)};rd.readAsText(f)}
+/* Some Android phones report the chosen file's size as 0 even when it has data.
+   So never trust the size: read the file in up to three ways and use whichever returns the content. */
+function bkRead(f){
+  const viaFR=()=>new Promise(res=>{try{const rd=new FileReader();rd.onload=()=>res(String(rd.result||''));rd.onerror=()=>res('');rd.readAsText(f)}catch(e){res('')}});
+  const viaText=()=>f.text?f.text().catch(()=>''):Promise.resolve('');
+  const viaBuf=()=>f.arrayBuffer?f.arrayBuffer().then(b=>new TextDecoder('utf-8').decode(b)).catch(()=>''):Promise.resolve('');
+  return viaText().then(t=>t||viaFR()).then(t=>t||viaBuf())}
+async function bakPick(inp){const f=inp.files&&inp.files[0];inp.value='';if(!f)return;bkMsg('Reading the file...',true);
+  const t=(await bkRead(f)).replace(/^\uFEFF/,'').trim(),info='<br><small>File chosen: <b>'+esc(f.name)+'</b> — read '+(t.length/1024).toFixed(1)+' KB</small>';let why='';
+  if(!t)why='The phone gave an empty file. Try choosing it from <b>Google Drive</b> instead (upload the backup to Drive first), or from Chrome → Downloads.';
+  else if(t[0]!=='{')why='This is not the backup file. Choose the file named learn-and-earn-backup-….json.';
+  else{try{const d=JSON.parse(t);if(d.app==='learn-and-earn'&&d.tables&&Array.isArray(d.tables.users)){BKF=d;BKM='';return dash()}why='This file is not a Learn and Earn backup.'}catch(e){why='This backup file is incomplete or damaged.'}}
+  BKF=null;bkMsg(why+info,false)}
 async function bakGo(){if(!BKF)return;if(!confirm('Restore this backup into the current database?'))return;const b=document.getElementById('bkr');b.disabled=true;b.textContent='Restoring...';
   try{await api('/admin/restore','POST',{data:BKF,confirm:'RESTORE'});BKF=null;BKM='';
     app.innerHTML=`<div class="box card" style="text-align:center"><div class="ok" style="font-size:54px">✔</div><h2>Restore complete</h2><p class="mut">All data is back. Please sign in again with your admin email and password.</p><button class="btn" onclick="TOKEN=false;cur=null;go('in')">Sign in</button></div>`}
