@@ -1195,8 +1195,8 @@ function bkMsg(t,ok){BKM=t;BKOK=ok;const e=document.getElementById('bkm');if(e){
 async function bakDl(){const b=document.getElementById('bkd');b.disabled=true;b.textContent='Preparing...';
   try{const r=await fetch('/api/admin/backup',{credentials:'same-origin',cache:'no-store'});if(!r.ok){let m='Download failed.';try{m=(await r.json()).error||m}catch(e){}throw new Error(m)}
     const txt=await r.text(),d=JSON.parse(txt),n=(d.tables.users||[]).length,day=new Date().toISOString().slice(0,10);
-    const url=URL.createObjectURL(new Blob([txt],{type:'application/json'})),a=document.createElement('a');a.href=url;a.download='learn-and-earn-backup-'+day+'.json';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),5000);
-    bkMsg('✓ Backup downloaded: learn-and-earn-backup-'+day+'.json ('+n+' accounts, '+(d.tables.pays||[]).length+' payments). Check your Downloads folder.',true)}
+    const url=URL.createObjectURL(new Blob([txt],{type:'application/json'})),a=document.createElement('a');a.href=url;a.download='learn-and-earn-backup-'+day+'.json';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),600000);
+    bkMsg('✓ Backup ready: learn-and-earn-backup-'+day+'.json — size <b>'+(txt.length/1024).toFixed(1)+' KB</b>, '+n+' accounts, '+(d.tables.pays||[]).length+' payments.<br>Open Files → Downloads and check the file is about this size (not 0 KB). If it is 0 KB, <a href="/api/admin/backup" download>tap here to download it directly</a>.',true)}
   catch(e){bkMsg(esc(e.message||'Download failed.'),false)}b.disabled=false;b.textContent='Download backup'}
 function bakPick(inp){const f=inp.files&&inp.files[0];inp.value='';if(!f)return;const info='<br><small>File chosen: <b>'+esc(f.name)+'</b> ('+(f.size/1024).toFixed(1)+' KB)</small>';
   const rd=new FileReader();rd.onerror=()=>{BKF=null;bkMsg('Could not read this file. Try choosing it again from Files → Downloads.'+info,false)};
