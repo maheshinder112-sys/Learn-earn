@@ -8,7 +8,8 @@ const CASHBACK = [1120, 1830, 2980, 3670, 3910], CB_MIN = 5000, LEVEL = ['Market
 const PASSIVE = PRICE.map(p => Math.round(p / 10)), ROOT = 'LRS-LEARN00001';
 
 const pool = new Pool({ connectionString: DATABASE_URL, ssl: /localhost|127\.0\.0\.1/.test(DATABASE_URL || '') ? false : { rejectUnauthorized: false } });
-const app = express(); app.set('trust proxy', 1); app.use(express.json({ limit: '400kb' }));
+const app = express(); app.set('trust proxy', 1); const jsonSmall = express.json({ limit: '400kb' }), jsonBig = express.json({ limit: '80mb' });
+app.use((req, res, next) => req.path === '/api/admin/restore' ? next() : jsonSmall(req, res, next));
 app.use((req, res, next) => {
   res.set({ 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'SAMEORIGIN', 'Referrer-Policy': 'same-origin',
     'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; frame-src https://www.youtube-nocookie.com; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'" });
@@ -447,8 +448,46 @@ app.post('/api/admin/resets/:id/:act', auth, adm, w(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// ---------- Backup / restore (admin only) ----------
+// Download: every table except sign-in sessions, as one JSON file.
+const BK_TABLES = ['users', 'reqs', 'pays', 'txns', 'ledger', 'cb_log', 'pwreq', 'admin_log'];
+app.get('/api/admin/backup', auth, adm, w(async (req, res) => {
+  const tables = {};
+  for (const t of BK_TABLES) tables[t] = (await pool.query(`SELECT * FROM ${t} ORDER BY id`)).rows;
+  const day = new Date().toISOString().slice(0, 10);
+  res.set('Content-Disposition', `attachment; filename="learn-and-earn-backup-${day}.json"`);
+  res.set('Cache-Control', 'no-store');
+  res.json({ app: 'learn-and-earn', v: 1, at: new Date().toISOString(), tables });
+}));
+// Restore: only into a NEW database (no members yet), so live data can never be overwritten by mistake.
+app.post('/api/admin/restore', auth, adm, jsonBig, w(async (req, res) => {
+  const b = req.body && req.body.data;
+  if (!req.body || req.body.confirm !== 'RESTORE') return res.status(400).json({ error: 'Confirmation missing.' });
+  if (!b || b.app !== 'learn-and-earn' || !b.tables || !Array.isArray(b.tables.users) || !b.tables.users.length) return res.status(400).json({ error: 'This is not a Learn and Earn backup file.' });
+  const [{ n }] = (await pool.query('SELECT count(*)::int n FROM users WHERE email<>$1', [AE])).rows;
+  if (n > 0) return res.status(409).json({ error: 'This database already has ' + n + ' member(s). Restore only works on a new, empty database, so your live data is never overwritten.' });
+  const c = await pool.connect(), counts = {};
+  try {
+    await c.query('BEGIN');
+    await c.query('DELETE FROM sessions');
+    for (const t of [...BK_TABLES].reverse()) await c.query(`DELETE FROM ${t}`);
+    for (const t of BK_TABLES) {
+      const rows = Array.isArray(b.tables[t]) ? b.tables[t] : [];
+      counts[t] = rows.length;
+      for (let i = 0; i < rows.length; i += 500)
+        await c.query(`INSERT INTO ${t} SELECT * FROM json_populate_recordset(NULL::${t}, $1::json)`, [JSON.stringify(rows.slice(i, i + 500))]);
+      await c.query(`SELECT setval(pg_get_serial_sequence('${t}','id'), COALESCE(MAX(id),1), MAX(id) IS NOT NULL) FROM ${t}`);
+    }
+    // The admin login always follows ADMIN_EMAIL / ADMIN_PASSWORD from Render.
+    await c.query("INSERT INTO users(name,email,phone,pw,code,pkg,status) VALUES('Admin',$1,'0000000000',$2,$3,0,'active') ON CONFLICT (email) DO UPDATE SET pw=EXCLUDED.pw,status='active',fails=0,locked=NULL", [AE, await bcrypt.hash(ADMIN_PASSWORD, 10), ROOT]);
+    await c.query('COMMIT');
+  } catch (e) { await c.query('ROLLBACK').catch(() => {}); console.error('restore', e); return res.status(400).json({ error: 'Restore failed, nothing was changed. (' + String(e.message || e).slice(0, 160) + ')' }); }
+  finally { c.release(); }
+  res.json({ ok: true, counts });
+}));
+
 // Open /api/health in the browser to see which server version is live.
-app.get('/api/health', (req, res) => res.json({ ok: true, version: '2026-11-01-c' }));
+app.get('/api/health', (req, res) => res.json({ ok: true, version: '2026-11-03-a' }));
 // Every page (/courses, /about, /login ...) is the same app file; the app reads the address and shows the right page.
 app.get('*', (req, res) => req.path.startsWith('/api/') ? res.status(404).json({ error: 'Not found' }) : res.sendFile(path.join(__dirname, 'index.html')));
 init().then(() => app.listen(process.env.PORT || 3000, () => console.log('Server running'))).catch(e => { console.error(e); process.exit(1); });

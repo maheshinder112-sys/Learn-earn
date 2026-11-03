@@ -290,6 +290,7 @@ input:focus{border-color:#0f766e;box-shadow:0 0 0 4px rgba(15,118,110,.2)}
 .ha-tw{animation:hatw 2.4s ease-in-out infinite}@keyframes hatw{50%{opacity:.2}}
 .ha-dot{transform-box:fill-box;transform-origin:center;animation:hapulse 1.8s ease-in-out infinite}@keyframes hapulse{50%{transform:scale(1.6)}}
 .hf svg{filter:drop-shadow(0 14px 24px rgba(99,102,241,.32))}
+.bkc h3{margin:0 0 6px}.bkc .btn{width:100%;margin-top:10px}.bkf{display:flex!important;align-items:center;justify-content:center;text-align:center;cursor:pointer}.bks{margin-top:12px;padding:12px;border:1px solid var(--line);border-radius:12px}.bkr{display:flex;justify-content:space-between;gap:10px;padding:5px 0;font-size:14px}.bkok{color:var(--acc);font-weight:600}
 </style>
 
 <style id="desktop-polish">
@@ -597,6 +598,26 @@ aside.sb .sbm .sbmo{color:#d1274b!important;border-top:1px solid var(--line)!imp
 .ucf div{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border:1px solid var(--line);border-radius:12px}
 .ucf span{color:var(--muted);font-size:14px}.ucf b{font-size:16px}
 .ucf div:first-child b{color:#d1274b}
+
+/* team: line table on phones too */
+@media(max-width:760px){.tsc{display:block!important;margin-top:6px}.tml{display:none!important}
+.tt{min-width:720px;font-size:14px!important}.tt b{font-size:14px!important}
+.tt th{padding:10px 12px;font-size:12.5px;white-space:nowrap}.tt td{padding:10px 12px}
+.tt .tav{width:34px!important;height:34px!important;font-size:12px!important}
+.tt th:first-child,.tt td:first-child{position:sticky;left:0;z-index:1;background:var(--card);box-shadow:1px 0 0 var(--line)}
+.tt .btn.sm{padding:7px 10px;font-size:12.5px}}
+.tsh{font-size:12.5px;color:var(--muted);margin:6px 2px 0;display:none}
+@media(max-width:760px){.tsh{display:block}}
+/* wallet history filter */
+.wlf{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 12px}
+.wlc{border:1.5px solid var(--line);background:var(--card);color:var(--ink);border-radius:999px;padding:8px 14px;font-size:13.5px;font-weight:600;cursor:pointer}
+.wlc.on{background:#0f766e;border-color:#0f766e;color:#fff}
+.wld{display:flex;align-items:center;gap:6px;margin-left:auto}
+.wld input{width:auto;margin:0;padding:7px 10px;font-size:14px;border-radius:10px}
+.wlx{border:0;background:none;color:#d1274b;font-weight:600;cursor:pointer;font-size:13px;padding:6px}
+.wls{display:flex;gap:14px;flex-wrap:wrap;font-size:13.5px;margin:-4px 2px 10px;color:var(--muted)}
+.wls b.ok{color:#16a34a}.wls b.err{color:#d1274b}
+@media(max-width:480px){.wld{margin-left:0;width:100%}.wld input{flex:1}}
 </style>
 </head>
 <body class="booting"><svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs><linearGradient id="gd" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#5fd3c3"/><stop offset=".55" stop-color="#0f766e"/><stop offset="1" stop-color="#0d6560"/></linearGradient><radialGradient id="bgp" cx=".7" cy=".1" r="1"><stop offset="0" stop-color="#3a2c0a"/><stop offset="1" stop-color="#0a0a0a"/></radialGradient><linearGradient id="g0" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffc371"/><stop offset="1" stop-color="#ff5e3a"/></linearGradient><radialGradient id="b0" cx=".7" cy=".1" r="1"><stop offset="0" stop-color="#5a2410"/><stop offset="1" stop-color="#0a0a0a"/></radialGradient><linearGradient id="g1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#c084fc"/><stop offset="1" stop-color="#6366f1"/></linearGradient><radialGradient id="b1" cx=".7" cy=".1" r="1"><stop offset="0" stop-color="#2d1458"/><stop offset="1" stop-color="#0a0a0a"/></radialGradient><linearGradient id="g2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#67e8f9"/><stop offset="1" stop-color="#2563eb"/></linearGradient><radialGradient id="b2" cx=".7" cy=".1" r="1"><stop offset="0" stop-color="#0c2a52"/><stop offset="1" stop-color="#0a0a0a"/></radialGradient><linearGradient id="g3" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f9a8d4"/><stop offset="1" stop-color="#e11d48"/></linearGradient><radialGradient id="b3" cx=".7" cy=".1" r="1"><stop offset="0" stop-color="#4a0f2a"/><stop offset="1" stop-color="#0a0a0a"/></radialGradient><linearGradient id="g4" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#6ee7b7"/><stop offset="1" stop-color="#059669"/></linearGradient><radialGradient id="b4" cx=".7" cy=".1" r="1"><stop offset="0" stop-color="#0b3a2a"/><stop offset="1" stop-color="#0a0a0a"/></radialGradient></defs></svg>
@@ -733,7 +754,7 @@ async function quickIn(){if(cur){tab='dash';go('dash')}else{ls('lae_saved',null)
 async function doIn(){const e=v('e').toLowerCase(),w=document.getElementById('w').value;try{const d=await api('/login','POST',{email:e,password:w});TOKEN=true;await load();tab='dash';ls('lae_last_e',e);const sv=ls('lae_saved');if(sv&&sv.e===e){await api('/remember','POST');return go('dash')}LG={e};askSave()}catch(x){err(x.message)}}
 let LG={};
 function askSave(){app.innerHTML=`<div class="box card" style="text-align:center"><h2>Stay signed in?</h2><p class="mut">Stay signed in on this device for 30 days, so you can open your ID with one tap.</p><button class="btn" onclick="api('/remember','POST').then(()=>{ls('lae_saved',LG);go('dash')})">Stay signed in</button><button class="btn ghost" onclick="go('dash')">Not now</button></div>`}
-const TABS=[['dash','Dashboard'],['team','My Team'],['aff','Affiliate Links'],['upg','Upgrade Course'],['crs','My Courses'],['lead','Leaderboard'],['vip','VIP'],['wal','My Wallet'],['prof','Update Profile'],['mem','Members'],['pay','Verification'],['pwd','Password Requests']];
+const TABS=[['dash','Dashboard'],['team','My Team'],['aff','Affiliate Links'],['upg','Upgrade Course'],['crs','My Courses'],['lead','Leaderboard'],['vip','VIP'],['wal','My Wallet'],['prof','Update Profile'],['mem','Members'],['pay','Verification'],['pwd','Password Requests'],['bak','Backup']];
 const nm=x=>esc(x.name)+(x.vip?' <span class="vip">(VIP)</span>':'');
 function vipHTML(u){return `<div class="vipbox"><div class="vlock"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></div><div class="vt">VIP</div><div class="vs">Coming Soon</div><p>Exclusive features for VIP members are on the way.</p>${u.vip?'<div class="vb">You are a VIP member ✦</div>':''}<div class="vsk"></div><div class="vsk" style="width:80%;margin-left:auto;margin-right:auto"></div><div class="vsk" style="width:60%;margin-left:auto;margin-right:auto"></div></div>`}
 function memRows(L){return L.length?L.map(m=>`<div class="card" style="margin-bottom:10px"><div class="row" style="justify-content:space-between"><b>${nm(m)}</b><span class="st ${m.status}">${m.status}</span></div><div class="code" style="justify-content:flex-start">${esc(m.code)}</div><div>${COURSES[m.pkg].n}</div><div class="mut" style="font-size:13px">${esc(m.email)} | ${esc(m.phone)}</div><div class="mwal">Wallet <b>${inr(+m.wallet||0)}</b> · Cashback <b>${inr(+m.cashback||0)}</b></div><div class="row"><button class="btn sm" onclick="mwOpen(${m.id},'add')">+ Add money</button><button class="btn sm ghost" onclick="mwOpen(${m.id},'deduct')">− Deduct money</button></div><div class="row"><button class="btn sm ghost" onclick="memVip(${m.id},${!m.vip})">${m.vip?'Remove VIP':'Make VIP'}</button>${m.status==='active'?`<button class="btn sm ghost" style="border-color:#d1274b;color:#d1274b" onclick="memSus(${m.id})">Suspend</button>`:m.status==='suspended'?`<button class="btn sm" onclick="memUns(${m.id})">Unsuspend</button>`:m.status==='pending'?`<button class="btn sm ghost" style="border-color:#d1274b;color:#d1274b" onclick="memDel(${m.id})">🗑 Delete</button>`:''}</div>${memKV(m)}</div>`).join(''):'<div class="card mut">No members found.</div>'}
@@ -757,6 +778,7 @@ prof:w('<circle cx="10" cy="8" r="5"/><path d="M2 21a8 8 0 0 1 10.43-7.62"/><pat
 mem:w('<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>'),
 pay:w('<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>'),
 upg:w('<circle cx="12" cy="12" r="10"/><path d="m16 12-4-4-4 4"/><path d="M12 16V8"/>'),
+bak:w('<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/>'),
 pwd:w('<circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/>'),
 out:w('<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>')}})();
 function cp(t,b){try{navigator.clipboard.writeText(t)}catch(e){}b.textContent='Copied'}
@@ -785,6 +807,7 @@ else if(tab==='vip'){h+=vipHTML(u)}
 else if(tab==='mem'&&isAdmin(u)){const S=D.stats||{members:0,earnings:0};h+=`<h2 class="sec">Members</h2><div class="earn"><div class="card"><span class="mut">Total members</span><div class="stat">${S.members}</div></div><div class="card"><span class="mut">Total earnings</span><div class="stat">${inr(S.earnings)}</div></div></div>${memChips()}<input id="mq" placeholder="Search name, email, phone, LRS or sponsor code" oninput="mq()" style="margin:12px 0 10px"><div id="ml">${memRows(memF(''))}</div>`}
 else if(tab==='upg'){h+=upgHTML(u)}
 else if(tab==='pwd'&&isAdmin(u)){h+=pwdHTML()}
+else if(tab==='bak'&&isAdmin(u)){h+=bakHTML()}
 else if(tab==='pay'&&isAdmin(u)){const P=D.pays;h+=`<h2 class="sec">Verification</h2><p class="mut">Confirm only after you see the money in your UPI app (${UPI_ID}).</p>${P.length?P.map(p=>`<div class="card" style="margin-bottom:12px"><b>${nm(p)}</b><div class="mut">${esc(p.email)}</div><div>${p.kind==='upgrade'?'Upgrade to '+COURSES[p.pkg].n:p.kind!=='recharge'?'Course: '+COURSES[p.pkg].n:'Wallet recharge'} - <b>${inr(p.amt)}</b> via ${esc(p.app)}</div>${p.utr?`<div class="utrv">UTR: <b>${esc(p.utr)}</b><button class="cpi" aria-label="Copy UTR" onclick="cpI('${esc(p.utr)}',this)">${IC.copy}</button></div>`:''}<div class="mut" style="font-size:13px">${new Date(p.at).toLocaleString('en-IN')}</div><div class="row" style="justify-content:space-between"><span class="${p.status==='confirmed'?'ok':p.status==='rejected'?'err':'mut'}">${p.status}</span>${p.status==='pending'?`<span class="row"><button class="btn sm" onclick="payAct(${p.id},1)">Confirm</button><button class="btn sm ghost" onclick="payAct(${p.id},0)">Reject</button></span>`:''}</div></div>`).join(''):'<div class="card mut">No payments yet.</div>'}`}
 else if(tab==='lead'){const r=D.lead.map(x=>({n:x.name,vip:x.vip,id:x.id,av:x.av,amt:x.amt}));h+=leadHTML(r)}
 else if(tab==='wal'){const rq=D.reqs,pc=rq.filter(r=>r.status==='pending').length,bt=(k,l)=>`<button class="chip${wt===k?' on':''}" onclick="sw('${k}')">${l}</button>`;
@@ -792,9 +815,9 @@ h+=`<h2 class="sec">My Wallet</h2><button class="btn" style="width:100%;margin-b
 if(wt==='rc')h+=rcView();
 else if(wt==='rq')h+=rq.length?rq.map(r=>`<div class="card" style="margin-bottom:12px"><b>${nm(r)}</b><div class="mut">${esc(r.email)} | ${esc(r.phone)}</div><div>${COURSES[r.pkg].n} - ${inr(COURSES[r.pkg].p)}</div><div class="row" style="justify-content:space-between"><span class="${r.status==='approved'?'ok':'mut'}">${r.status==='approved'?'Approved':'Pending'}</span>${r.status==='pending'?`<span class="row">${(cur.admin||r.pkg<=cur.pkg)?`<button class="btn sm" onclick="apvAsk(${r.id})">✔ Approve</button>`:''}<button class="btn sm ghost" style="border-color:#d1274b;color:#d1274b" onclick="rjq(${r.id})">✖ Reject</button></span>`:''}</div>${r.status==='pending'&&!cur.admin&&r.pkg>cur.pkg?`<p class="err" style="margin:8px 0 0;font-size:14px">🔒 This ID is for ${COURSES[r.pkg].n}, which is higher than your course (${COURSES[cur.pkg].n}). Upgrade your course to ${COURSES[r.pkg].n} or higher to approve it.</p>`:''}</div>`).join(''):'<div class="card mut">No account requests yet. Share your LRS code.</div>';
 else if(wt==='cb')h+=`<div class="card">${(D.cb||[]).length?D.cb.map(x=>`<div class="li"><div><b class="${x.type==='credit'?'ok':'err'}">${x.type==='credit'?'+':'-'}${inr(x.amt)}</b> ${esc(x.why)}<div class="mut" style="font-size:13px">${new Date(x.at).toLocaleString('en-IN')}</div></div></div>`).join(''):'<div class="mut">No cashback yet.</div>'}</div>`;
-else h+=`<div class="card">${D.txns.length?D.txns.map(x=>`<div class="li"><div><b class="${x.type==='credit'?'ok':'err'}">${x.type==='credit'?'+':'-'}${inr(x.amt)}</b> ${esc(x.why)}<div class="mut" style="font-size:13px">Balance ${inr(x.bal)} | ${new Date(x.at).toLocaleString('en-IN')}</div></div></div>`).join(''):'<div class="mut">No transactions yet.</div>'}</div>`}
+else h+=`${wlF()}<div class="card">${WLX().length?WLX().map(x=>`<div class="li"><div><b class="${x.type==='credit'?'ok':'err'}">${x.type==='credit'?'+':'-'}${inr(x.amt)}</b> ${esc(x.why)}<div class="mut" style="font-size:13px">Balance ${inr(x.bal)} | ${new Date(x.at).toLocaleString('en-IN')}</div></div></div>`).join(''):'<div class="mut">No transactions yet.</div>'}</div>`}
 else{h+=profHTML(u,D.mentor)}
-const nb=TABS.filter(t=>!['pay','mem','pwd'].includes(t[0])||isAdmin(u)).map(t=>`<button class="${tab===t[0]?'on':''}${t[0]==='vip'?' uv':''}" onclick="st('${t[0]}')"><span class="sbi">${TI[t[0]]||''}</span><span>${t[1]}</span>${dotFor(t[0])?'<i class="rdot" aria-label="New"></i>':''}</button>`).join('');app.innerHTML=`<div class="dl"><div class="ov" id="ov" onclick="tg()"></div><aside class="sb" id="sb">${sbTop()}${sbNav(nb)}${sbUser(u)}</aside><section class="mn">${h}</section></div>`;if((tab==='wal'&&wt==='rc'&&rcS===2)||(tab==='upg'&&UPS!=null))drawQR()}
+const nb=TABS.filter(t=>!['pay','mem','pwd','bak'].includes(t[0])||isAdmin(u)).map(t=>`<button class="${tab===t[0]?'on':''}${t[0]==='vip'?' uv':''}" onclick="st('${t[0]}')"><span class="sbi">${TI[t[0]]||''}</span><span>${t[1]}</span>${dotFor(t[0])?'<i class="rdot" aria-label="New"></i>':''}</button>`).join('');app.innerHTML=`<div class="dl"><div class="ov" id="ov" onclick="tg()"></div><aside class="sb" id="sb">${sbTop()}${sbNav(nb)}${sbUser(u)}</aside><section class="mn">${h}</section></div>`;if((tab==='wal'&&wt==='rc'&&rcS===2)||(tab==='upg'&&UPS!=null))drawQR()}
 function medal(i){const C=[['#fff6c2','#0f766e','#7a5a0c'],['#ffffff','#c9c9c9','#5c5c5c'],['#ffd9bd','#cd7f32','#6e3a12']][i];let L='';
 for(let k=0;k<5;k++){const d=118+k*24,a=d*Math.PI/180,x=24+19*Math.cos(a),y=24+19*Math.sin(a),x2=48-x;L+=`<ellipse cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" rx="3.6" ry="1.7" transform="rotate(${d+90} ${x.toFixed(1)} ${y.toFixed(1)})"/><ellipse cx="${x2.toFixed(1)}" cy="${y.toFixed(1)}" rx="3.6" ry="1.7" transform="rotate(${90-d} ${x2.toFixed(1)} ${y.toFixed(1)})"/>`}
 return `<svg viewBox="0 0 48 48" width="50" height="50" aria-label="Rank ${i+1}"><defs><radialGradient id="md${i}" cx="35%" cy="30%" r="75%"><stop offset="0" stop-color="${C[0]}"/><stop offset="1" stop-color="${C[1]}"/></radialGradient></defs><g fill="${C[1]}">${L}</g><circle cx="24" cy="24" r="14" fill="url(#md${i})" stroke="${C[2]}" stroke-width="1.4"/><path d="M19 9.5l2 2 3-3 3 3 2-2-.8 4h-8.4z" fill="${C[1]}" stroke="${C[2]}" stroke-width=".6"/><text x="24" y="29.5" text-anchor="middle" font-size="15" font-weight="800" fill="${C[2]}" font-family="Poppins,system-ui,sans-serif">${i+1}</text></svg>`}
@@ -807,10 +830,10 @@ const UPI_ID='7717465541@fam',SCH={'GPay':'tez://upi/pay','PhonePe':'phonepe://p
 let rcS=0,rcAmt=0,PAY={a:0,app:'',done:null},CK={},ckApp='GPay',ckM='';
 function upiQ(a){return '?pa='+UPI_ID+'&pn='+encodeURIComponent('Learn and Earn')+'&am='+a+'&cu=INR&tn='+encodeURIComponent('Learn and Earn')}
 function upiLink(){return SCH[PAY.app]+upiQ(PAY.a)}
-function openApp(){try{window.location.href=upiLink()}catch(e){}}
+function openApp(){try{window.location.href=upiHref(PAY.app);upiWatch()}catch(e){}}
 function drawQR(){try{const el=document.getElementById('qr');el.innerHTML='';new QRCode(el,{text:'upi://pay'+upiQ(PAY.a),width:200,height:200,colorDark:'#0b1f4d',colorLight:'#ffffff'})}catch(e){}}
 let PAYERR='';
-function payHTML(back){PAY.back=back;return `<div class="card box payc"><h3>Pay ${inr(PAY.a)}</h3><p class="mut" style="margin:0">Scan the QR with any UPI app, or tap your app below.</p><div class="qr" id="qr"></div><div class="upid"><span class="mut">UPI ID</span><b>${UPI_ID}</b><button class="cpi" aria-label="Copy UPI ID" onclick="cpI('${UPI_ID}',this)">${IC.copy}</button></div><div class="apps">${APPS.map(a=>`<a class="appb" href="${SCH[a]+upiQ(PAY.a)}" onclick="PAY.app='${a}'">${a}</a>`).join('')}</div><div class="utrb"><label>UTR number<input id="utr" inputmode="numeric" autocomplete="off" placeholder="12-digit number" oninput="this.value=this.value.replace(/\\D/g,'').slice(0,12)"></label><p class="mut" style="font-size:12.5px;margin:6px 0 0">After paying, open the payment in your UPI app and copy the 12-digit UTR / UPI Ref. No.</p><p class="err" id="ue">${esc(PAYERR)}</p><button class="btn" onclick="paidGo()">Submit</button></div><button class="back" onclick="PAYERR='';${back}">Back</button></div>`}
+function payHTML(back){PAY.back=back;if(PAY.one&&SCH[PAY.app])return payOneHTML(back);return `<div class="card box payc"><h3>Pay ${inr(PAY.a)}</h3><p class="mut" style="margin:0">Scan the QR with any UPI app, or tap your app below.</p><div class="qr" id="qr"></div><div class="upid"><span class="mut">UPI ID</span><b>${UPI_ID}</b><button class="cpi" aria-label="Copy UPI ID" onclick="cpI('${UPI_ID}',this)">${IC.copy}</button></div><div class="apps">${APPS.map(a=>`<a class="appb" href="${upiHref(a)}" onclick="PAY.app='${a}';upiWatch()">${a}</a>`).join('')}</div><div class="utrb"><label>UTR number<input id="utr" inputmode="numeric" autocomplete="off" placeholder="12-digit number" oninput="this.value=this.value.replace(/\\D/g,'').slice(0,12)"></label><p class="mut" style="font-size:12.5px;margin:6px 0 0">After paying, open the payment in your UPI app and copy the 12-digit UTR / UPI Ref. No.</p><p class="err" id="ue">${esc(PAYERR)}</p><button class="btn" onclick="paidGo()">Submit</button></div><button class="back" onclick="PAYERR='';${back}">Back</button></div>`}
 function paidGo(){const u=(document.getElementById('utr').value||'').replace(/\D/g,'');if(u.length!==12){document.getElementById('ue').textContent='Enter the 12-digit UTR number.';return}PAY.utr=u;PAYERR='';app.innerHTML='<div class="ld"><div class="sp"></div><h3>Submitting your payment</h3><span class="mut">Please wait...</span></div>';setTimeout(()=>PAY.done(),600)}
 function pendScreen(t,after){app.innerHTML=`<div class="ld"><div style="font-size:56px">⏳</div><h3>Payment submitted</h3><span class="mut">${t}</span></div>`;setTimeout(after,2200)}
 function okScreen(t,after){app.innerHTML=`<div class="ld"><div class="ok" style="font-size:60px">✔</div><h3>Payment successful</h3><span class="mut">${t}</span></div>`;setTimeout(after,1700)}
@@ -819,9 +842,9 @@ function rcView(){
 if(rcS===0)return `<div class="card box"><h3>Recharge wallet</h3><label>Amount (₹)<input id="am" type="number" min="1" value="${rcAmt||''}" placeholder="e.g. 4500"></label><div class="chips">${[299,749,1499,2999,4499].map(a=>`<button class="chip" onclick="document.getElementById('am').value=${a}">${inr(a)}</button>`).join('')}</div><button class="btn" style="margin-top:14px" onclick="rc1()">Continue</button></div>`;
 if(rcS===1)return `<div class="card box"><h3>Pay ${inr(rcAmt)} using</h3><div class="chips">${appChips('rc2')}</div><button class="back" onclick="rcBack()">Back</button></div>`;
 return payHTML('rcBack()')}
-function rc1(){const a=+document.getElementById('am').value;if(!(a>0)){wm='Enter a valid amount.';wmOk=false;return dash()}rcAmt=a;rcS=2;PAY={a,app:'UPI',done:rcDone};PAYERR='';wm='';dash()}
-function rc2(a){PAY={a:rcAmt,app:a,done:rcDone};rcS=2;dash();openApp()}
-function rcBack(){rcS=0;PAYERR='';dash()}
+function rc1(){const a=+document.getElementById('am').value;if(!(a>0)){wm='Enter a valid amount.';wmOk=false;return dash()}rcAmt=a;rcS=1;PAYERR='';wm='';dash()}
+function rc2(a){PAY={a:rcAmt,app:a,one:true,done:rcDone};rcS=2;dash();openApp()}
+function rcBack(){rcS=rcS===2?1:0;PAYERR='';dash()}
 async function rcDone(){const a=rcAmt;try{await api('/wallet/recharge','POST',{amount:a,app:PAY.app,utr:PAY.utr});wm='Payment of '+inr(a)+' submitted. It is added to your wallet after verification.';wmOk=true}catch(e){PAYERR=e.message;return dash()}pendScreen('It will be added to your wallet once verified.',()=>{rcS=0;rcAmt=0;wt='rc';dash()})}
 /* direct buy checkout */
 function defSponsor(){const a=users().find(x=>x.email===ADMINS[0]);return a?a.code:ROOT}
@@ -892,7 +915,7 @@ const n=f.length,pages=Math.max(1,Math.ceil(n/TPP));if(TP>pages)TP=pages;const a
 if(!all.length)return '<p class="mut" style="margin:6px 0">No one has joined with your code yet. Share your LRS code to build your team.</p>';
 const cpc=v=>v?`<span class="cpw"><button class="cpb" data-v="${esc(v)}" onclick="tcp(this)" aria-label="Copy">${IC.copy}</button>${esc(v)}</span>`:'<span class="mut">-</span>';
 let pg='';const lo=Math.max(1,TP-2),hi=Math.min(pages,lo+4);for(let k=lo;k<=hi;k++)pg+=`<button class="pgb${k===TP?' on':''}" onclick="TP=${k};tdraw()">${k}</button>`;
-return `<div class="tsc"><table class="tt"><thead><tr><th>Name</th><th>Phone</th><th>Email</th><th>Course</th><th>Joined</th><th>Actions</th></tr></thead><tbody>${rows.length?rows.map(([x,i])=>`<tr><td><div class="tn">${tav(x)}<b>${nmx(x)}</b></div></td><td>${cpc(x.phone)}</td><td>${cpc(x.email)}</td><td>${COURSES[x.pkg].n}</td><td>${new Date(x.at||x.t).toLocaleDateString('en-IN')}</td><td><span class="row" style="flex-wrap:nowrap"><button class="btn sm ghost" onclick="tpv(${i})">See Profile</button><button class="btn sm" onclick="tup(${i})">Update Profile</button></span></td></tr>`).join(''):'<tr><td colspan="6" class="mut">No team member matches your search.</td></tr>'}</tbody></table></div><div class="tml">${rows.length?rows.map(([x,i])=>`<div class="tmc"><div class="tmh">${tav(x)}<div style="min-width:0"><b>${nmx(x)}</b><div class="mut">${COURSES[x.pkg].n} · ${new Date(x.at||x.t).toLocaleDateString('en-IN')}</div></div></div><div class="tmd">${cpc(x.phone)}${cpc(x.email)}</div><div class="tma"><button class="btn sm ghost" onclick="tpv(${i})">See Profile</button><button class="btn sm" onclick="tup(${i})">Update Profile</button></div></div>`).join(''):'<p class="mut">No team member matches your search.</p>'}</div>
+return `<div class="tsh">← Swipe the table sideways to see all details →</div><div class="tsc"><table class="tt"><thead><tr><th>Name</th><th>Phone</th><th>Email</th><th>Course</th><th>Joined</th><th>Actions</th></tr></thead><tbody>${rows.length?rows.map(([x,i])=>`<tr><td><div class="tn">${tav(x)}<b>${nmx(x)}</b></div></td><td>${cpc(x.phone)}</td><td>${cpc(x.email)}</td><td>${COURSES[x.pkg].n}</td><td>${new Date(x.at||x.t).toLocaleDateString('en-IN')}</td><td><span class="row" style="flex-wrap:nowrap"><button class="btn sm ghost" onclick="tpv(${i})">See Profile</button><button class="btn sm" onclick="tup(${i})">Update Profile</button></span></td></tr>`).join(''):'<tr><td colspan="6" class="mut">No team member matches your search.</td></tr>'}</tbody></table></div><div class="tml">${rows.length?rows.map(([x,i])=>`<div class="tmc"><div class="tmh">${tav(x)}<div style="min-width:0"><b>${nmx(x)}</b><div class="mut">${COURSES[x.pkg].n} · ${new Date(x.at||x.t).toLocaleDateString('en-IN')}</div></div></div><div class="tmd">${cpc(x.phone)}${cpc(x.email)}</div><div class="tma"><button class="btn sm ghost" onclick="tpv(${i})">See Profile</button><button class="btn sm" onclick="tup(${i})">Update Profile</button></div></div>`).join(''):'<p class="mut">No team member matches your search.</p>'}</div>
 <div class="tpg"><span class="mut">Showing ${n?a+1:0} to ${Math.min(a+TPP,n)} of ${n} team member${n===1?'':'s'}</span><span class="row"><button class="pgb" ${TP<=1?'disabled':''} onclick="TP--;tdraw()" aria-label="Previous page">‹</button>${pg}<button class="pgb" ${TP>=pages?'disabled':''} onclick="TP++;tdraw()" aria-label="Next page">›</button></span></div>`}
 function tdraw(){const w=document.getElementById('tw');if(w)w.innerHTML=tbl()}
 function tcp(b){const v=b.dataset.v;try{navigator.clipboard.writeText(v)}catch(e){}b.innerHTML=IC.check;b.classList.add('ok');setTimeout(()=>{b.innerHTML=IC.copy;b.classList.remove('ok')},1400)}
@@ -1050,7 +1073,7 @@ function cpI(t,b){try{navigator.clipboard.writeText(t).catch(()=>{})}catch(e){}b
 function cuRun(){const E=[...document.querySelectorAll('[data-cu]:not([data-cud])')];if(!E.length)return;if(DSC()){E.forEach(e=>e.dataset.cud='1');return}
   const rm=matchMedia('(prefers-reduced-motion: reduce)').matches;
   E.forEach(el=>{el.dataset.cud='1';const end=Number(el.dataset.cu)||0,fin=el.textContent;if(rm||end<=0)return;
-    const t0=performance.now(),D=1100;el.textContent=inr(0);
+    const t0=performance.now(),D=2000;el.textContent=inr(0);
     const f=n=>{if(!el.isConnected)return;const p=Math.min(1,(n-t0)/D),e=1-Math.pow(1-p,3);
       if(p<1){el.textContent=inr(Math.round(end*e));requestAnimationFrame(f)}else el.textContent=fin};
     requestAnimationFrame(f);setTimeout(()=>{if(el.isConnected)el.textContent=fin},D+400)})}
@@ -1141,6 +1164,48 @@ function PHONE(){return `<div class="phw" aria-label="Example of the member dash
 </div></div><div class="phf phf1"><em>+₹700</em> earned</div><div class="phf phf2">🎉 New member joined</div></div>`}
 
 async function upgWalPost(k){const d=await api('/upgrade/wallet','POST',{pkg:k});return d}
+function WLSRC(){return (typeof D!=='undefined'&&D.txns)||[]}
+function wlRe(){dash0()}
+
+/* wallet history: filter by money in / out and by date */
+var WLT='all',WLD='';
+function wlDay(x){const d=new Date(x.at||x.t);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')}
+function WLX(){return WLSRC().filter(x=>(WLT==='all'||(WLT==='in'?x.type==='credit':x.type!=='credit'))&&(!WLD||wlDay(x)===WLD))}
+function wlF(){const L=WLX(),tin=L.filter(x=>x.type==='credit').reduce((a,x)=>a+(+x.amt||0),0),tout=L.filter(x=>x.type!=='credit').reduce((a,x)=>a+(+x.amt||0),0);
+  const c=(k,t)=>`<button class="wlc${WLT===k?' on':''}" onclick="WLT='${k}';wlRe()">${t}</button>`;
+  return `<div class="wlf">${c('all','All')}${c('in','↓ Money in')}${c('out','↑ Money out')}<span class="wld"><input type="date" aria-label="Filter by date" value="${WLD}" onchange="WLD=this.value;wlRe()">${WLD?`<button class="wlx" onclick="WLD='';wlRe()">Clear</button>`:''}</span></div>
+  <div class="wls"><span>${L.length} entr${L.length===1?'y':'ies'}</span><span>In: <b class="ok">${inr(tin)}</b></span><span>Out: <b class="err">${inr(tout)}</b></span></div>`}
+
+/* UPI app links: on Android the general "Any UPI app" link uses Chrome's intent link, which reliably shows the list of UPI apps */
+function upiHref(a){const q=upiQ(PAY.a);if(a==='Any UPI app'&&/Android/i.test(navigator.userAgent))return 'intent://pay'+q+'#Intent;scheme=upi;end';return SCH[a]+q}
+function upiWatch(){let left=false;const v=()=>{if(document.visibilityState==='hidden')left=true},b=()=>{left=true};document.addEventListener('visibilitychange',v);window.addEventListener('blur',b);
+  setTimeout(()=>{document.removeEventListener('visibilitychange',v);window.removeEventListener('blur',b);if(!left)toast('No UPI app opened. Please scan the QR code instead.')},2000)}
+
+/* ---------- Admin: Backup / Restore ---------- */
+let BKF=null,BKM='',BKOK=true;
+const BKN={users:'Members (incl. admin)',pays:'Payments',reqs:'Activation requests',txns:'Wallet entries',ledger:'Earning entries',cb_log:'Cashback entries',pwreq:'Password requests',admin_log:'Admin log'};
+function bkCounts(t){return Object.keys(BKN).map(k=>`<div class="bkr"><span>${BKN[k]}</span><b>${(t[k]||[]).length}</b></div>`).join('')}
+function bakHTML(){return `<h2 class="sec">Backup</h2>
+<div class="card box bkc"><h3>1. Download backup</h3><p class="mut">Saves all members, wallets, earnings and payments in one file on this phone. Do this <b>before</b> moving to a new database. Keep the file private: it has members' phone numbers and emails.</p><button class="btn" id="bkd" onclick="bakDl()">Download backup</button></div>
+<div class="card box bkc"><h3>2. Restore backup</h3><p class="mut">Use this only <b>after</b> the website is connected to the new, empty database. Choose the backup file you downloaded.</p>
+<label class="btn ghost bkf">Choose backup file<input type="file" accept=".json,application/json" onchange="bakPick(this)" hidden></label>
+${BKF?`<div class="bks"><div class="mut" style="margin-bottom:6px">Backup from <b>${esc(new Date(BKF.at).toLocaleString('en-IN'))}</b></div>${bkCounts(BKF.tables)}</div><button class="btn" id="bkr" onclick="bakGo()">Restore now</button>`:''}</div>
+${BKM?`<p class="${BKOK?'bkok':'err'}" id="bkm">${BKM}</p>`:'<p id="bkm"></p>'}`}
+function bkMsg(t,ok){BKM=t;BKOK=ok;const e=document.getElementById('bkm');if(e){e.className=ok?'bkok':'err';e.innerHTML=t}}
+async function bakDl(){const b=document.getElementById('bkd');b.disabled=true;b.textContent='Preparing...';
+  try{const r=await fetch('/api/admin/backup',{credentials:'same-origin',cache:'no-store'});if(!r.ok){let m='Download failed.';try{m=(await r.json()).error||m}catch(e){}throw new Error(m)}
+    const txt=await r.text(),d=JSON.parse(txt),n=(d.tables.users||[]).length,day=new Date().toISOString().slice(0,10);
+    const url=URL.createObjectURL(new Blob([txt],{type:'application/json'})),a=document.createElement('a');a.href=url;a.download='learn-and-earn-backup-'+day+'.json';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),5000);
+    bkMsg('✓ Backup downloaded: learn-and-earn-backup-'+day+'.json ('+n+' accounts, '+(d.tables.pays||[]).length+' payments). Check your Downloads folder.',true)}
+  catch(e){bkMsg(esc(e.message||'Download failed.'),false)}b.disabled=false;b.textContent='Download backup'}
+function bakPick(inp){const f=inp.files&&inp.files[0];if(!f)return;const rd=new FileReader();rd.onload=()=>{try{const d=JSON.parse(rd.result);if(d.app!=='learn-and-earn'||!d.tables||!Array.isArray(d.tables.users))throw 0;BKF=d;BKM='';dash()}catch(e){BKF=null;bkMsg('This is not a Learn and Earn backup file.',false)}};rd.readAsText(f)}
+async function bakGo(){if(!BKF)return;if(!confirm('Restore this backup into the current database?'))return;const b=document.getElementById('bkr');b.disabled=true;b.textContent='Restoring...';
+  try{await api('/admin/restore','POST',{data:BKF,confirm:'RESTORE'});BKF=null;BKM='';
+    app.innerHTML=`<div class="box card" style="text-align:center"><div class="ok" style="font-size:54px">✔</div><h2>Restore complete</h2><p class="mut">All data is back. Please sign in again with your admin email and password.</p><button class="btn" onclick="TOKEN=false;cur=null;go('in')">Sign in</button></div>`}
+  catch(e){b.disabled=false;b.textContent='Restore now';bkMsg(esc(e.message),false)}}
+
+/* Pay screen when the member already picked an app (wallet recharge): QR + open that app + UTR */
+function payOneHTML(back){const A=PAY.app;return `<div class="card box payc"><h3>Pay ${inr(PAY.a)} with ${esc(A)}</h3><p class="mut" style="margin:0">${esc(A)} should open now. If it doesn't, tap the button or scan the QR.</p><div class="qr" id="qr"></div><div class="upid"><span class="mut">UPI ID</span><b>${UPI_ID}</b><button class="cpi" aria-label="Copy UPI ID" onclick="cpI('${UPI_ID}',this)">${IC.copy}</button></div><a class="btn" style="text-decoration:none;text-align:center" href="${upiHref(A)}" onclick="upiWatch()">Open ${esc(A)}</a><div class="utrb"><label>UTR number<input id="utr" inputmode="numeric" autocomplete="off" placeholder="12-digit number" oninput="this.value=this.value.replace(/\\D/g,'').slice(0,12)"></label><p class="mut" style="font-size:12.5px;margin:6px 0 0">After paying, open the payment in your UPI app and copy the 12-digit UTR / UPI Ref. No.</p><p class="err" id="ue">${esc(PAYERR)}</p><button class="btn" onclick="paidGo()">Submit</button></div><button class="back" onclick="PAYERR='';${back}">Back</button></div>`}
 </script>
 </body>
 </html>
