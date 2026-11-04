@@ -8,8 +8,7 @@ const CASHBACK = [1120, 1830, 2980, 3670, 3910], CB_MIN = 5000, LEVEL = ['Market
 const PASSIVE = PRICE.map(p => Math.round(p / 10)), ROOT = 'LRS-LEARN00001';
 
 const pool = new Pool({ connectionString: DATABASE_URL, ssl: /localhost|127\.0\.0\.1/.test(DATABASE_URL || '') ? false : { rejectUnauthorized: false } });
-const app = express(); app.set('trust proxy', 1); const jsonSmall = express.json({ limit: '400kb' }), jsonBig = express.json({ limit: '80mb' });
-app.use((req, res, next) => req.path === '/api/admin/restore' ? next() : jsonSmall(req, res, next));
+const app = express(); app.set('trust proxy', 1); app.use(express.json({ limit: '400kb' }));
 app.use((req, res, next) => {
   res.set({ 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'SAMEORIGIN', 'Referrer-Policy': 'same-origin',
     'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; frame-src https://www.youtube-nocookie.com; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'" });
@@ -375,6 +374,58 @@ app.post('/api/admin/members/:id/wallet', auth, adm, w(async (req, res) => {
     return { wallet: num(u.wallet) };
   }));
 }));
+// Admin: add to / deduct from a member's EARNINGS (not the wallet).
+// today -> counts in Today, 7 days, 30 days and All time; week -> 7 days, 30 days, All time;
+// month -> 30 days and All time; total -> All time only. The entry is dated so it lands in the right boxes.
+const EARN_AT = { today: 'now()', week: `(date_trunc('day',${IST}) AT TIME ZONE 'Asia/Kolkata') - interval '1 hour'`, month: "now() - interval '8 days'", total: "now() - interval '31 days'" };
+const EARN_KEY = { today: 'today', week: 'd7', month: 'd30', total: 'total' };
+const earnOf = async (c, id) => { const [e] = await q(c, `SELECT
+    COALESCE(SUM(amt) FILTER (WHERE at >= (date_trunc('day',${IST})) AT TIME ZONE 'Asia/Kolkata'),0) AS today,
+    COALESCE(SUM(amt) FILTER (WHERE at > now()-interval '7 days'),0) AS d7,
+    COALESCE(SUM(amt) FILTER (WHERE at > now()-interval '30 days'),0) AS d30,
+    COALESCE(SUM(amt),0) AS total FROM ledger WHERE uid=$1`, [id]);
+  return { today: num(e.today), d7: num(e.d7), d30: num(e.d30), total: num(e.total) }; };
+app.post('/api/admin/members/:id/earn', auth, adm, w(async (req, res) => {
+  const b = req.body.bucket, t = req.body.type, a = Math.round(num(req.body.amount) * 100) / 100;
+  if (!EARN_AT[b]) throw new E(400, 'Choose Today, Weekly, Monthly or Total.');
+  if (!['add', 'deduct'].includes(t)) throw new E(400, 'Choose add or deduct.');
+  if (!(a > 0 && a <= 1e7)) throw new E(400, 'Enter a valid amount.');
+  res.json(await tx(async c => {
+    const [m] = await q(c, "SELECT id FROM users WHERE id=$1 AND email<>$2 AND status<>'rejected' FOR UPDATE", [+req.params.id || 0, AE]);
+    if (!m) throw new E(404, 'Member not found.');
+    const cur = await earnOf(c, m.id), have = cur[EARN_KEY[b]];
+    if (t === 'deduct' && a > have) throw new E(400, 'This box has only \u20b9' + have.toLocaleString('en-IN') + '. You cannot deduct more than that.');
+    await c.query(`INSERT INTO ledger(uid,amt,why,at) VALUES($1,$2,$3,${EARN_AT[b]})`, [m.id, t === 'add' ? a : -a, 'Earning ' + (t === 'add' ? 'added' : 'deducted') + ' by admin']);
+    await c.query('INSERT INTO admin_log(admin,action,target) VALUES($1,$2,$3)', [req.u.id, 'earn ' + t + ' ' + b + ' ' + a, m.id]);
+    TOP.at = 0; // refresh the leaderboard
+    return { earn: await earnOf(c, m.id) };
+  }));
+}));
+// Admin only: move a member (with their whole team) under a different sponsor.
+// Past earnings stay where they are; only future commissions follow the new sponsor.
+app.post('/api/admin/members/:id/sponsor', auth, adm, w(async (req, res) => {
+  const code = normCode(req.body.code);
+  if (!/^LRS-[A-Z0-9]{5,20}$/.test(code)) throw new E(400, 'Enter a valid LRS code.');
+  res.json(await tx(async c => {
+    const [m] = await q(c, "SELECT id,name,code,sponsor FROM users WHERE id=$1 AND email<>$2 AND status<>'rejected' FOR UPDATE", [+req.params.id || 0, AE]);
+    if (!m) throw new E(404, 'Member not found.');
+    if (code === m.code) throw new E(400, 'A member cannot be their own sponsor.');
+    if (code === m.sponsor) throw new E(400, 'This member is already under that sponsor.');
+    const [s] = await q(c, "SELECT id,name,code,status FROM users WHERE code=$1", [code]);
+    if (!s) throw new E(404, 'No member has this LRS code.');
+    if (s.status !== 'active') throw new E(400, 'The new sponsor\'s ID is not active.');
+    // Block loops: the new sponsor must not be inside this member's own team.
+    const [loop] = await q(c, `WITH RECURSIVE up(code, sponsor, d) AS (
+        SELECT code, sponsor, 0 FROM users WHERE code=$1
+        UNION ALL SELECT u.code, u.sponsor, up.d+1 FROM users u JOIN up ON u.code=up.sponsor WHERE up.d < 500)
+      SELECT 1 AS x FROM up WHERE code=$2 LIMIT 1`, [code, m.code]);
+    if (loop) throw new E(400, 'That person is in ' + m.name + '\'s own team, so they cannot become the sponsor.');
+    await c.query('UPDATE users SET sponsor=$1 WHERE id=$2', [code, m.id]);
+    await c.query("UPDATE reqs SET sponsor=$1 WHERE uid=$2 AND status='pending'", [code, m.id]);
+    await c.query('INSERT INTO admin_log(admin,action,target) VALUES($1,$2,$3)', [req.u.id, 'sponsor ' + (m.sponsor || '-') + ' -> ' + code, m.id]);
+    return { ok: true, sponsor: code, sname: s.name };
+  }));
+}));
 app.post('/api/admin/members/:id/:act', auth, adm, w(async (req, res) => {
   const a = req.params.act, on = !!req.body.on;
   if (!['vip', 'suspend', 'remove'].includes(a)) throw new E(400, 'Bad action.');
@@ -448,46 +499,8 @@ app.post('/api/admin/resets/:id/:act', auth, adm, w(async (req, res) => {
   res.json({ ok: true });
 }));
 
-// ---------- Backup / restore (admin only) ----------
-// Download: every table except sign-in sessions, as one JSON file.
-const BK_TABLES = ['users', 'reqs', 'pays', 'txns', 'ledger', 'cb_log', 'pwreq', 'admin_log'];
-app.get('/api/admin/backup', auth, adm, w(async (req, res) => {
-  const tables = {};
-  for (const t of BK_TABLES) tables[t] = (await pool.query(`SELECT * FROM ${t} ORDER BY id`)).rows;
-  const day = new Date().toISOString().slice(0, 10);
-  res.set('Content-Disposition', `attachment; filename="learn-and-earn-backup-${day}.json"`);
-  res.set('Cache-Control', 'no-store');
-  res.json({ app: 'learn-and-earn', v: 1, at: new Date().toISOString(), tables });
-}));
-// Restore: only into a NEW database (no members yet), so live data can never be overwritten by mistake.
-app.post('/api/admin/restore', auth, adm, jsonBig, w(async (req, res) => {
-  const b = req.body && req.body.data;
-  if (!req.body || req.body.confirm !== 'RESTORE') return res.status(400).json({ error: 'Confirmation missing.' });
-  if (!b || b.app !== 'learn-and-earn' || !b.tables || !Array.isArray(b.tables.users) || !b.tables.users.length) return res.status(400).json({ error: 'This is not a Learn and Earn backup file.' });
-  const [{ n }] = (await pool.query('SELECT count(*)::int n FROM users WHERE email<>$1', [AE])).rows;
-  if (n > 0) return res.status(409).json({ error: 'This database already has ' + n + ' member(s). Restore only works on a new, empty database, so your live data is never overwritten.' });
-  const c = await pool.connect(), counts = {};
-  try {
-    await c.query('BEGIN');
-    await c.query('DELETE FROM sessions');
-    for (const t of [...BK_TABLES].reverse()) await c.query(`DELETE FROM ${t}`);
-    for (const t of BK_TABLES) {
-      const rows = Array.isArray(b.tables[t]) ? b.tables[t] : [];
-      counts[t] = rows.length;
-      for (let i = 0; i < rows.length; i += 500)
-        await c.query(`INSERT INTO ${t} SELECT * FROM json_populate_recordset(NULL::${t}, $1::json)`, [JSON.stringify(rows.slice(i, i + 500))]);
-      await c.query(`SELECT setval(pg_get_serial_sequence('${t}','id'), COALESCE(MAX(id),1), MAX(id) IS NOT NULL) FROM ${t}`);
-    }
-    // The admin login always follows ADMIN_EMAIL / ADMIN_PASSWORD from Render.
-    await c.query("INSERT INTO users(name,email,phone,pw,code,pkg,status) VALUES('Admin',$1,'0000000000',$2,$3,0,'active') ON CONFLICT (email) DO UPDATE SET pw=EXCLUDED.pw,status='active',fails=0,locked=NULL", [AE, await bcrypt.hash(ADMIN_PASSWORD, 10), ROOT]);
-    await c.query('COMMIT');
-  } catch (e) { await c.query('ROLLBACK').catch(() => {}); console.error('restore', e); return res.status(400).json({ error: 'Restore failed, nothing was changed. (' + String(e.message || e).slice(0, 160) + ')' }); }
-  finally { c.release(); }
-  res.json({ ok: true, counts });
-}));
-
 // Open /api/health in the browser to see which server version is live.
-app.get('/api/health', (req, res) => res.json({ ok: true, version: '2026-11-03-a' }));
+app.get('/api/health', (req, res) => res.json({ ok: true, version: '2026-11-03-c' }));
 // Every page (/courses, /about, /login ...) is the same app file; the app reads the address and shows the right page.
 app.get('*', (req, res) => req.path.startsWith('/api/') ? res.status(404).json({ error: 'Not found' }) : res.sendFile(path.join(__dirname, 'index.html')));
 init().then(() => app.listen(process.env.PORT || 3000, () => console.log('Server running'))).catch(e => { console.error(e); process.exit(1); });
